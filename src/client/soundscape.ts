@@ -14,6 +14,7 @@ export class Soundscape {
   private rain!: GainNode;
   private rainTone!: BiquadFilterNode;
   private buffers = new Map<Track, Promise<AudioBuffer | null>>();
+  private bytes = new Map<Track, Promise<ArrayBuffer | null>>();
   private current: { track: Track; src: AudioBufferSourceNode; gain: GainNode } | null = null;
   private wanted: Track | null = null;
   private weather: Weather = "storm";
@@ -114,6 +115,49 @@ export class Soundscape {
     });
   }
 
+  // 手机のバイブ：低いうなりを 0.4 秒ずつ 3 回
+  phoneBuzz() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    for (let i = 0; i < 3; i++) {
+      const t = ctx.currentTime + 0.1 + i * 0.75;
+      const o = ctx.createOscillator();
+      o.type = "sawtooth";
+      o.frequency.value = 165;
+      const lp = ctx.createBiquadFilter();
+      lp.type = "lowpass";
+      lp.frequency.value = 600;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(0.16, t + 0.03);
+      g.gain.setValueAtTime(0.16, t + 0.38);
+      g.gain.linearRampToValueAtTime(0, t + 0.42);
+      o.connect(lp).connect(g).connect(this.master);
+      o.start(t);
+      o.stop(t + 0.45);
+    }
+  }
+
+  // 録音済みの効果音・台詞（店長の声など）を一度だけ鳴らす。鳴っている間は音楽を下げる
+  async clip(url: string, delay = 0.6) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const buf = await fetch(url)
+      .then((r) => r.arrayBuffer())
+      .then((a) => ctx.decodeAudioData(a))
+      .catch(() => null);
+    if (!buf) return;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const g = ctx.createGain();
+    g.gain.value = 0.85;
+    src.connect(g).connect(this.master);
+    const t = ctx.currentTime + delay;
+    src.start(t);
+    this.music.gain.setTargetAtTime(0.35, t, 0.2);
+    this.music.gain.setTargetAtTime(1, t + buf.duration, 0.6);
+  }
+
   private buildRain(ctx: AudioContext) {
     const src = ctx.createBufferSource();
     src.buffer = this.noise(ctx, 6, false);
@@ -150,12 +194,23 @@ export class Soundscape {
     return buf;
   }
 
-  private load(track: Track) {
-    let p = this.buffers.get(track);
+  // 音声の解錠前でもダウンロードだけは始めておける（開場で最初の曲がすぐ鳴るように）
+  preload(track: Track) {
+    let p = this.bytes.get(track);
     if (!p) {
       p = fetch(`/bgm/${track}.mp3`)
         .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`bgm ${r.status}`))))
-        .then((a) => this.ctx!.decodeAudioData(a))
+        .catch(() => null);
+      this.bytes.set(track, p);
+    }
+    return p;
+  }
+
+  private load(track: Track) {
+    let p = this.buffers.get(track);
+    if (!p) {
+      p = this.preload(track)
+        .then((a) => (a ? this.ctx!.decodeAudioData(a.slice(0)) : null))
         .catch(() => null);
       this.buffers.set(track, p);
     }

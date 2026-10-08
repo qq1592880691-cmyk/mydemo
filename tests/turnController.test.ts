@@ -287,3 +287,45 @@ describe("TurnController", () => {
     expect(c.getSnapshot().charState).toBe("listening");
   });
 });
+
+describe("开场预加载", () => {
+  it("先读后点开始：不再发新请求，读到的节拍照常播放；点之前不播放", async () => {
+    const { c, turns, played } = setup();
+    c.prefetchStart();
+    expect(turns.length).toBe(1);
+    turns[0].push({ type: "meta", turnId: 1, provider: "mock" });
+    turns[0].push({ type: "beat", turnId: 1, beat: beat(0, "开场第一句"), audio: null });
+    turns[0].push({ type: "done", turnId: 1 });
+    turns[0].end();
+    await tick(20);
+    expect(played).toEqual([]);
+    await c.start();
+    await tick(80);
+    expect(turns.length).toBe(1);
+    expect(played).toEqual(["开场第一句"]);
+    expect(c.getSnapshot().charState).toBe("idle");
+  });
+
+  it("还没读完就点开始：接上进行中的请求", async () => {
+    const { c, turns, played } = setup();
+    c.prefetchStart();
+    void c.start();
+    await tick(10);
+    turns[0].push({ type: "beat", turnId: 1, beat: beat(0, "晚到的一句"), audio: null });
+    turns[0].push({ type: "done", turnId: 1 });
+    turns[0].end();
+    await tick(80);
+    expect(turns.length).toBe(1);
+    expect(played).toEqual(["晚到的一句"]);
+  });
+
+  it("切换 Mock 后重新预加载，旧请求被取消", async () => {
+    const { c, turns } = setup();
+    c.prefetchStart();
+    c.forceMock = true;
+    c.prefetchStart();
+    expect(turns.length).toBe(2);
+    expect(turns[0].signal.aborted).toBe(true);
+    expect(turns[1].req.forceMock).toBe(true);
+  });
+});

@@ -172,8 +172,11 @@ with sync_playwright() as pw:
     interrupt = [l for l in lg if " interrupt " in l]
     check("日志记录打断并丢弃未播放节拍", bool(interrupt), interrupt[0] if interrupt else "")
     cur_turn = p.evaluate("document.querySelector('.metrics dt + dd')?.textContent")
-    later_beats = [l for l in lg[: lg.index(interrupt[0])] if " beat " in l] if interrupt else []
-    check("打断后旧回合不再播放节拍/字幕", not later_beats, f"打断后新增 beat {len(later_beats)} 条")
+    later_beats = []
+    for it in interrupt:
+        old = it.split(" ")[1]
+        later_beats += [l for l in lg[: lg.index(it)] if " beat " in l and f" {old} " in l]
+    check("打断后旧回合不再播放节拍/字幕", interrupt and not later_beats, f"打断 {len(interrupt)} 次，旧回合打断后新增 beat {len(later_beats)} 条 {later_beats}")
 
     # ---------- 4. 连续快速输入只播最后一轮 ----------
     for t in ["第一句", "第二句", "嗯嗯"]:
@@ -185,22 +188,43 @@ with sync_playwright() as pw:
     superseded = [l for l in lg if " superseded " in l]
     check("快速连发：前两轮被取代", len(superseded) >= 2, f"superseded {len(superseded)} 次")
 
-    # ---------- 5. 剧情推进到停电 / 吐露 / 结局 ----------
-    script = ["你在等谁呀？", "真好，我理解你", "我陪你一起等吧"]
-    blackout_seen = False
-    for t in script:
-        send(p, t)
+    # ---------- 5. 只点「推动剧情」的选项（最后一个），一路走到结局 ----------
+    seen = {"lights-off": False, "lights-dim": False, "note": False, "narration": False, "phone": False}
+    for _ in range(20):
+        if p.locator(".ending-card").count():
+            break
+        if p.locator(".choice").count():
+            p.locator(".choice").last.click()
+        else:
+            send(p, "你在等谁呀？")
         for _ in range(400):
-            if "lights-off" in (p.get_attribute(".stage", "class") or ""):
-                if not blackout_seen:
-                    p.screenshot(path=f"{SHOTS}/06_blackout_candle.png")
-                blackout_seen = True
+            cls = p.get_attribute(".stage", "class") or ""
+            if "lights-off" in cls and not seen["lights-off"]:
+                seen["lights-off"] = True
+                p.screenshot(path=f"{SHOTS}/06_blackout_candle.png")
+            if "lights-dim" in cls:
+                seen["lights-dim"] = True
+            if p.locator(".note-card").count() and not seen["note"]:
+                seen["note"] = True
+                p.screenshot(path=f"{SHOTS}/06b_note.png")
+            if p.locator(".narration").count() and not seen["narration"]:
+                seen["narration"] = True
+                p.screenshot(path=f"{SHOTS}/06c_closing.png")
+            if p.locator('.sprite-body img.on[src*="act_phone"]').count():
+                seen["phone"] = True
             if "待机" in status(p):
                 break
             p.wait_for_timeout(100)
         if p.locator(".photo .x").count():
             p.locator(".photo .x").first.dispatch_event("click")
-    check("环境变化：停电/烛光出现过", blackout_seen or "blackout" in (dd(p, "事件") or ""), dd(p, "事件"))
+        if p.locator(".note-card .x").count():
+            p.locator(".note-card .x").first.dispatch_event("click")
+    flags = dd(p, "事件") or ""
+    check("环境变化：停电烛光", seen["lights-off"] or "blackout" in flags, flags)
+    check("新场景：雨小了、月亮", "moon" in flags, flags)
+    check("新场景：留言墙字条卡片", seen["note"])
+    check("新场景：手机响（看手机立绘）", seen["phone"] and "phone" in flags)
+    check("新场景：店长催打烊（旁白 + 灯光减半）", seen["narration"] and seen["lights-dim"])
     p.wait_for_selector(".ending-card", timeout=20000)
     p.screenshot(path=f"{SHOTS}/07_ending.png")
     check("走到结局卡片", p.locator(".ending-card h2").inner_text() != "", f"{p.locator('.ending-card h2').inner_text()}，信任 {dd(p, '信任')}，事件 {dd(p, '事件')}")

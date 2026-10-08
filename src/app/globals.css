@@ -364,3 +364,26 @@ button:disabled { cursor: default; opacity: 0.45; }
 }
 .choice:hover { background: rgba(70, 45, 28, .85); }
 .choice:active { transform: scale(.96); }
+
+/* ---------- 打烊前：灯光减半 ---------- */
+.lights-dim .lamps { opacity: .4; }
+.lights-dim .blackout { opacity: .42; }
+
+/* ---------- 留言墙字条 ---------- */
+.note-card {
+  position: absolute; z-index: 18; left: 5%; top: 18%; width: min(46vw, 230px); padding: 14px 16px 18px;
+  background: #fbe9a6; color: #4a3a22; box-shadow: 0 12px 30px rgba(0,0,0,.45); transform: rotate(-4deg);
+  font-family: "Kaiti SC", "STKaiti", "KaiTi", "Songti SC", serif; animation: noteIn .7s cubic-bezier(.2,.8,.3,1.2); cursor: pointer;
+}
+.note-card::before { content: ""; position: absolute; left: 50%; top: -10px; width: 56px; height: 20px; margin-left: -28px; background: rgba(255,255,255,.5); transform: rotate(3deg); }
+.note-card figcaption { font-size: 11px; letter-spacing: .2em; opacity: .55; margin-bottom: 8px; font-family: inherit; }
+.note-card p { font-size: 17px; line-height: 1.6; }
+.note-card .x { position: absolute; right: 6px; top: 2px; color: #7a6540; }
+@keyframes noteIn { from { opacity: 0; transform: translate(-30px, 20px) rotate(-14deg); } }
+
+/* ---------- 旁白（店长喊话等） ---------- */
+.narration {
+  position: absolute; z-index: 19; left: 50%; top: calc(env(safe-area-inset-top) + 64px); transform: translateX(-50%);
+  max-width: min(90vw, 520px); padding: 8px 14px; border-radius: 8px; background: rgba(0,0,0,.55); color: #e8dccb;
+  font-size: 13px; font-style: italic; text-align: center; animation: fadeIn .6s ease;
+}

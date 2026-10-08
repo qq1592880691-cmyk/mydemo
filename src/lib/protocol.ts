@@ -13,13 +13,14 @@ export const ACTIONS = [
   "hold_candle",
   "wipe_tears",
   "wave",
+  "check_phone",
 ] as const;
 export const WEATHERS = ["storm", "rain", "clear"] as const;
 export const CAMERAS = ["wide", "close"] as const;
 export const FXS = ["none", "lightning", "sparkle"] as const;
 export const PLOTS = ["meet", "chat", "reveal", "ending"] as const;
-export const LIGHTS = ["on", "off"] as const;
-export const INCIDENTS = ["blackout", "lights_on", "old_photo", "doorbell", "arrival"] as const;
+export const LIGHTS = ["on", "off", "dim"] as const;
+export const INCIDENTS = ["blackout", "lights_on", "moon", "old_photo", "note", "phone", "doorbell", "closing", "arrival"] as const;
 export const ENDINGS = ["reunion", "letgo", "farewell"] as const;
 
 export type Emotion = (typeof EMOTIONS)[number];
@@ -48,6 +49,8 @@ export interface StoryState {
   fin?: boolean;
   // 最後に物語が一歩進んだユーザーターン番号。間が空くほど次の出来事を強く促す
   lastStep?: number;
+  // 直近に起きた出来事。次のターンでまずそれに反応させる
+  recent?: Incident;
 }
 
 export const INITIAL_STORY: StoryState = { trust: 4, flags: [] };
@@ -73,6 +76,10 @@ export interface Beat {
   // LLM が付ける信頼度の増減（-2..2）と出来事、結末の最終行
   trust?: number;
   incident?: Incident;
+  // incident "note" のとき、留言墙の字条に書かれていた文面
+  note?: string;
+  // ending に入る句で、モデルがユーザーの助言に沿って選んだ結末（許される範囲だけ採用）
+  ending?: Ending;
   fin?: boolean;
   // サーバが反映した後の物語状態。変化した節拍にだけ付く
   story?: StoryState;
@@ -197,5 +204,7 @@ export function normalizeBeat(raw: Record<string, unknown>, seq: number): Beat |
   if (Number.isFinite(trust) && Math.round(trust) !== 0) beat.trust = Math.max(-2, Math.min(2, Math.round(trust)));
   if (typeof raw.incident === "string" && (INCIDENTS as readonly string[]).includes(raw.incident)) beat.incident = raw.incident as Incident;
   if (raw.fin === true) beat.fin = true;
+  if (typeof raw.ending === "string" && (ENDINGS as readonly string[]).includes(raw.ending)) beat.ending = raw.ending as Ending;
+  if (typeof raw.note === "string" && stripVoiceTags(raw.note).trim()) beat.note = stripVoiceTags(raw.note).trim().slice(0, 80);
   return beat;
 }

@@ -103,7 +103,7 @@ export function WindowView({ weather }: { weather: Weather }) {
         </defs>
         <rect width="1000" height="700" fill="url(#skyStorm)" />
         <rect width="1000" height="700" fill="url(#skyClear)" className="sky-clear" style={{ opacity: clear ? 1 : 0 }} />
-        <g className="moon" style={{ opacity: clear ? 1 : 0 }}>
+        <g className="moon" style={{ opacity: clear ? 1 : weather === "rain" ? 0.55 : 0 }}>
           <circle cx="780" cy="120" r="90" fill="url(#moonGlow)" />
           <circle cx="780" cy="120" r="34" fill="#fff4d6" />
         </g>

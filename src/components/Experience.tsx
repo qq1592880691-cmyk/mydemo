@@ -16,6 +16,7 @@ const ENDING_TEXT: Record<Ending, { title: string; line: string }> = {
   farewell: { title: "告别", line: "雨还在下。她轻声说了晚安，咖啡馆的灯一盏盏熄灭。" },
 };
 const MUTE_KEY = "mira-muted";
+const CLOSING_LINE = "还有十分钟就打烊了哦——不着急，你们慢慢聊。";
 const SILENCE_PEAK = 0.08;
 
 interface Runtime {
@@ -50,6 +51,7 @@ export default function Experience() {
   const [mock, setMock] = useState(false);
   const [muted, setMuted] = useState(false);
   const [endSeen, setEndSeen] = useState(false);
+  const [narration, setNarration] = useState<string | null>(null);
   const pressing = useRef(false);
   const micBtn = useRef<HTMLButtonElement>(null);
 
@@ -62,7 +64,14 @@ export default function Experience() {
   useEffect(() => {
     ctrl.forceMock = mock;
     ctrl.fail = fail || undefined;
-  }, [ctrl, mock, fail]);
+    // 開場カードを読んでいる間に 1 ターン目を先読みする。URL パラメータの反映を待つため少し遅らせる
+    if (s.started) return;
+    const t = setTimeout(() => ctrl.prefetchStart(), 300);
+    return () => clearTimeout(t);
+  }, [ctrl, mock, fail, s.started]);
+  useEffect(() => {
+    sound.preload("meet");
+  }, [sound]);
 
   // 音はユーザー操作の中でしか始められないので、操作のたびに解錠と接続を試みる
   const unlock = useCallback(() => {
@@ -105,8 +114,19 @@ export default function Experience() {
     if (s.fx === "lightning" && s.fxNonce) sound.thunder();
   }, [sound, s.fx, s.fxNonce]);
   useEffect(() => {
-    if (s.incident?.kind === "doorbell" || s.incident?.kind === "arrival") sound.doorbell();
+    const k = s.incident?.kind;
+    if (k === "doorbell" || k === "arrival") sound.doorbell();
+    if (k === "phone") sound.phoneBuzz();
+    if (k === "closing") {
+      void sound.clip("/sfx/closing.wav");
+      setNarration(`后厨传来店长的声音：「${CLOSING_LINE}」`);
+    }
   }, [sound, s.incident]);
+  useEffect(() => {
+    if (!narration) return;
+    const t = setTimeout(() => setNarration(null), 6000);
+    return () => clearTimeout(t);
+  }, [narration]);
 
   useEffect(() => {
     if (!hint) return;
@@ -199,7 +219,7 @@ export default function Experience() {
   };
 
   return (
-    <main className={`stage cam-${s.scene.camera} weather-${s.scene.weather} cs-${s.charState} ${lightsOff ? "lights-off" : ""}`}>
+    <main className={`stage cam-${s.scene.camera} weather-${s.scene.weather} cs-${s.charState} ${lightsOff ? "lights-off" : ""} ${s.scene.lights === "dim" ? "lights-dim" : ""}`}>
       <div className="camera">
         <div className="wall" />
         <WindowView weather={s.scene.weather} />
@@ -250,6 +270,23 @@ export default function Experience() {
       {hint && <div className="toast toast-hint">{hint}</div>}
 
       <PhotoCard snap={s} ctrl={ctrl} />
+      {s.note && (
+        <figure key={s.note.nonce} className="note-card" onClick={() => ctrl.dismissNote()}>
+          <figcaption>留言墙 · 三年前</figcaption>
+          <p>{s.note.text}</p>
+          <button
+            className="x"
+            onClick={(e) => {
+              e.stopPropagation();
+              ctrl.dismissNote();
+            }}
+            aria-label="收起字条"
+          >
+            ×
+          </button>
+        </figure>
+      )}
+      {narration && <div className="narration">{narration}</div>}
 
       <section className="dock">
         <div className="subtitle" aria-live="polite">

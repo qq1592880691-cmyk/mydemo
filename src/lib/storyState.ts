@@ -11,6 +11,14 @@ export const OLD_PHOTO: PhotoEvent = {
   caption: "三年前的雨夜",
 };
 
+export const MOON_PHOTO: PhotoEvent = {
+  type: "photo",
+  subject: "Moonlight breaking through thinning rain clouds over wet city rooftops, seen through a rain-speckled cafe window, warm lamp reflections on the glass",
+  caption: "雨小了的时候",
+};
+
+export const DEFAULT_NOTE = "谢谢你的照片。三年后的今天，我会回来取。——一个躲雨的人";
+
 // 結末は「reveal → ending」に入る時点の状態で決める。prompt に書く結末と必ず一致させるため、ターン開始時の状態を使う
 export function pickEnding(s: StoryState): Ending {
   if (s.trust >= 7 && s.flags.includes("doorbell")) return "reunion";
@@ -23,6 +31,32 @@ export function userTurnOf(history: { who: string }[], inputKind: string): numbe
   return history.filter((h) => h.who === "user").length + (inputKind === "start" ? 0 : 1);
 }
 
+const OUTER = new Set<Incident>(["blackout", "moon", "phone", "doorbell", "closing"]);
+
+// 保底時刻表（何回目のユーザー発話までに起こすか）。モデルが早めに起こすのは自由で、遅れた分だけここで補う。
+// 15 ターン前後で結末まで届くように並べてある
+export const PLOT_DUE = { chat: 2, reveal: 6, ending: 13 } as const;
+const INCIDENT_DUE: [Incident, number][] = [
+  ["blackout", 4],
+  ["moon", 5],
+  ["old_photo", 8],
+  ["note", 9],
+  ["phone", 10],
+  ["doorbell", 11],
+  ["closing", 12],
+];
+
+// 期限切れで補う出来事の台詞。ターンの最後の一句として足す
+export const FORCED_LINE: Record<string, { say: string; emotion: Beat["emotion"] }> = {
+  blackout: { say: "啊，停电了……别怕，我包里有蜡烛。", emotion: "surprised" },
+  moon: { say: "诶，你看窗外，雨小了……有月亮。", emotion: "happy" },
+  old_photo: { say: "给你看看吧，就是这张。", emotion: "shy" },
+  note: { say: "对了，墙上还有他当年留的字条。", emotion: "shy" },
+  phone: { say: "……我的手机响了，陌生号码。", emotion: "surprised" },
+  doorbell: { say: "……门铃？", emotion: "surprised" },
+  closing: { say: "嗯，店长在催了……", emotion: "sad" },
+};
+
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 // 1 ターン分の物語状態を節拍ごとに進める。変化があった節拍には反映後の状態を載せ、
@@ -30,8 +64,10 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 export class StoryTurn {
   private trustDelta = 0;
   private hadPhoto = false;
-  // 1 ターンに進める物語は 1 歩まで（阶段の前進か出来事のどちらか）。雑談に一気に筋を詰め込ませない
+  // 1 ターンに進める物語は「内面の一歩」（阶段の前進・写真・字条）と「外から来る出来事」（停電・門铃など）を各 1 つまで。
+  // 雑談に筋を詰め込みすぎず、それでいて場面の数だけターンが延びないようにする
   private progressed = false;
+  private outerDone = false;
   private stepped = false;
   private readonly endingAtStart: Ending;
 
@@ -41,6 +77,26 @@ export class StoryTurn {
     private userTurn = 0,
   ) {
     this.endingAtStart = state.ending ?? pickEnding(state);
+  }
+
+  // ターン最初の句に呼ぶ。モデルが阶段の印を付け忘れても物語が止まらないよう、保底時刻表どおりに阶段を進める
+  nudge(beat: Beat, plot: PlotStage): Beat {
+    if (beat.plot) return beat;
+    const t = this.userTurn;
+    if (plot === "meet" && t >= PLOT_DUE.chat) beat.plot = "chat";
+    else if (plot === "chat" && t >= PLOT_DUE.reveal) beat.plot = "reveal";
+    else if (plot === "reveal" && t >= PLOT_DUE.ending && this.state.flags.includes("closing")) beat.plot = "ending";
+    return beat;
+  }
+
+  // ターンの最後に呼ぶ。時刻表で期限を過ぎてもまだ起きていない出来事を 1 つ返す（このターンで既に進んでいれば無し）
+  due(plot: PlotStage): Incident | null {
+    if (this.stepped || plot === "meet" || plot === "ending") return null;
+    const st = this.state;
+    for (const [i, turn] of INCIDENT_DUE) {
+      if (this.userTurn >= turn && !st.flags.includes(i) && this.allowed(i, st, plot)) return i;
+    }
+    return null;
   }
 
   // applyPlotHooks より前に呼ぶ。門铃が鳴る前の結末入りは無効にし、重逢の伏線を必ず通す
@@ -68,7 +124,8 @@ export class StoryTurn {
     }
 
     if (beat.plot === "ending" && !st.ending) {
-      st.ending = this.endingAtStart;
+      // 重逢の条件を満たしていても、門铃の後にユーザーが「放下」を勧めたなら释然にする（選択が結末を決める）
+      st.ending = this.endingAtStart === "reunion" && beat.ending === "letgo" ? "letgo" : this.endingAtStart;
       changed = true;
       // 停電のまま結末に入ったら灯りを戻す
       if (st.flags.includes("blackout") && !st.flags.includes("lights_on")) {
@@ -83,17 +140,29 @@ export class StoryTurn {
     }
 
     if (beat.incident) {
-      // 来電と「彼の到着」は結末の演出の一部なので 1 歩の制限に数えない
+      // 来電と「彼の到着」は結末の演出の一部なので制限に数えない
       const free = beat.incident === "lights_on" || beat.incident === "arrival";
-      if (this.allowed(beat.incident, st) && (free || !this.progressed)) {
-        if (!free) this.progressed = this.stepped = true;
+      const outer = OUTER.has(beat.incident);
+      const room = free || (outer ? !this.outerDone : !this.progressed);
+      if (this.allowed(beat.incident, st, plot) && room) {
+        if (!free) {
+          if (outer) this.outerDone = true;
+          else this.progressed = true;
+          this.stepped = true;
+        }
         st.flags.push(beat.incident);
+        st.recent = beat.incident;
         changed = true;
         present(beat, beat.incident);
       } else {
         delete beat.incident;
       }
     }
+
+    delete beat.ending;
+
+    // 字条の文面は「note」の出来事が成立した句にだけ残す
+    if (beat.incident !== "note") delete beat.note;
 
     // 写真（生図）は 1 ターン 1 枚まで
     if (beat.event) {
@@ -123,10 +192,16 @@ export class StoryTurn {
     return beat;
   }
 
-  private allowed(i: Incident, st: StoryState): boolean {
+  private allowed(i: Incident, st: StoryState, plot: PlotStage): boolean {
     if (st.flags.includes(i)) return false;
+    // 寒暄の間は出来事を起こさない（開幕の「门铃响了」を剧情の門铃と取り違えないように）
+    if (plot === "meet") return false;
+    if (i === "doorbell") return st.flags.includes("old_photo");
     if (i === "lights_on") return st.flags.includes("blackout");
     if (i === "arrival") return st.ending === "reunion";
+    if (i === "note" || i === "phone") return st.flags.includes("old_photo");
+    if (i === "closing") return st.flags.includes("doorbell") && !st.ending;
+    if (i === "moon") return !st.flags.includes("doorbell") && !st.ending;
     return true;
   }
 }
@@ -149,6 +224,23 @@ function present(beat: Beat, i: Incident) {
       break;
     case "doorbell":
       if (idle) beat.action = "look_door";
+      break;
+    case "moon":
+      // 雨が弱まり、窓の外に月が覗く。二人で窓の外を撮る
+      beat.scene = { ...beat.scene, weather: "rain" };
+      if (idle) beat.action = "raise_camera";
+      beat.event ??= { ...MOON_PHOTO };
+      break;
+    case "note":
+      beat.note ??= DEFAULT_NOTE;
+      if (idle) beat.action = "touch_hairpin";
+      break;
+    case "phone":
+      if (idle) beat.action = "check_phone";
+      break;
+    case "closing":
+      // 閉店前の合図として店内の灯りを半分落とす
+      beat.scene = { ...beat.scene, lights: "dim" };
       break;
     case "arrival":
       if (idle) beat.action = "look_door";

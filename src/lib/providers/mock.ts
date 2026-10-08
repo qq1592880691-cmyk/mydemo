@@ -56,6 +56,23 @@ const SCRIPT = {
     { say: "就是这张。", emotion: "shy", action: "give_photo", incident: "old_photo" },
     { say: "我们约好今天，我把洗好的照片交给他。", emotion: "sad", action: "none" },
   ],
+  moon: [
+    { say: "诶，你看窗外——雨小了。", emotion: "surprised", action: "look_window" },
+    { say: "云散开了，有月亮！别动，我拍一张。", emotion: "happy", action: "raise_camera", incident: "moon" },
+  ],
+  note: [
+    { say: "其实……那天他走之前，在墙角的留言墙上贴了一张便利贴。", emotion: "shy", action: "look_window" },
+    { say: "就是这张，我一直没舍得撕。", emotion: "shy", action: "touch_hairpin", incident: "note", note: "谢谢你的照片。三年后的今天，我会回来取。——一个躲雨的人" },
+  ],
+  phone: [
+    { say: "嗯……我也不知道他还记不记得。", emotion: "sad", action: "none" },
+    { say: "……手机响了。陌生号码。", emotion: "surprised", action: "check_phone", incident: "phone" },
+    { say: "你说，我要接吗？", emotion: "shy", action: "check_phone" },
+  ],
+  closing: [
+    { say: "嗯，我听到了……店长在催了。", emotion: "neutral", action: "look_window", incident: "closing" },
+    { say: "十分钟……我得做个决定了。", emotion: "sad", action: "touch_hairpin" },
+  ],
   doorbell: [
     { say: "……！", emotion: "surprised", action: "look_door", incident: "doorbell" },
     { say: "……是风啊。", emotion: "sad", action: "none" },
@@ -68,7 +85,7 @@ const SCRIPT = {
     { say: "谢谢你今晚陪我等。再见啦。", emotion: "happy", action: "wave", fin: true },
   ],
   letgo: [
-    { say: "真的……雨停了。", emotion: "surprised", action: "look_window", plot: "ending" },
+    { say: "真的……雨停了。", emotion: "surprised", action: "look_window", plot: "ending", ending: "letgo" },
     { say: "也许我等的不是他，是一个能好好告别的晚上。", emotion: "happy", action: "touch_hairpin", fx: "sparkle" },
     {
       say: "来，看镜头——今晚的纪念。",
@@ -98,10 +115,14 @@ const CHOICES = new Map<Raw[], string[]>([
   [SCRIPT.start, ["你好，雨好大", "这里还营业吗？", "你是在等人吗？"]],
   [SCRIPT.greet, ["你是摄影师吗？", "这里的咖啡好喝吗？", "你在等谁呀？"]],
   [SCRIPT.photo, ["拍得真好看", "下次带我去拍照吧", "你在等谁呀？"]],
-  [SCRIPT.blackout, ["别怕，我在呢", "烛光也挺好的", "你在等谁呀？"]],
+  [SCRIPT.blackout, ["别怕，我在呢", "烛光也挺好的", "雨好像小了？"]],
   [SCRIPT.idle, ["你拍的照片真好看", "谢谢你陪我聊天", "你在等谁呀？"]],
-  [SCRIPT.reveal, ["那张照片拍得真好", "他是个什么样的人？", "你还会继续等吗？"]],
-  [SCRIPT.doorbell, ["算了，关我什么事", "也许该放下了", "我陪你一起等吧"]],
+  [SCRIPT.moon, ["月亮真好看", "能给我也拍一张吗？", "你在等谁呀？"]],
+  [SCRIPT.reveal, ["那张照片拍得真好", "他是个什么样的人？", "他有没有留下过什么？"]],
+  [SCRIPT.note, ["字写得真好看", "他一定很珍惜那张照片", "你还要继续等吗？"]],
+  [SCRIPT.phone, ["说不定是推销电话", "别接了", "接吧，说不定是他"]],
+  [SCRIPT.closing, ["算了，关我什么事", "也许该放下了", "我陪你再等一会儿"]],
+  [SCRIPT.doorbell, ["吓我一跳", "原来是风啊", "你还要继续等吗？"]],
   [SCRIPT.reunion, ["祝你们好好的", "谢谢你今晚的故事"]],
   [SCRIPT.letgo, ["这张照片我会留着", "下次下雨再见"]],
   [SCRIPT.farewell, ["晚安，路上小心", "对不起，打扰了"]],
@@ -117,9 +138,15 @@ function pickScript(text: string, plot: PlotStage, story: StoryState, userTurns:
   if (plot === "ending") return SCRIPT[story.ending ?? "letgo"];
   if (plot === "reveal") {
     if (!has("old_photo")) return SCRIPT.reveal;
+    if (!has("note")) return SCRIPT.note;
+    if (!has("phone")) return SCRIPT.phone;
     if (!has("doorbell")) return SCRIPT.doorbell;
-    return SCRIPT[pickEnding(story)];
+    if (!has("closing")) return SCRIPT.closing;
+    const ending = pickEnding(story);
+    return SCRIPT[ending === "reunion" && /放下|别等|不等/.test(text) ? "letgo" : ending];
   }
+  // 雨が弱まるのは外から来る出来事なので、停電の後なら話題に関係なく先に起こす
+  if (plot === "chat" && !has("moon") && (has("blackout") || /雨.*小|月亮|窗外/.test(text))) return SCRIPT.moon;
   if (/等|谁|为什么|一个人|约/.test(text)) return SCRIPT.reveal;
   if (/照片|拍|相机|摄影/.test(text)) return SCRIPT.photo;
   if (plot === "chat" && !has("blackout") && userTurns >= 3) return SCRIPT.blackout;

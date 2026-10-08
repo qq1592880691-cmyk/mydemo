@@ -45,6 +45,7 @@ describe("StoryTurn", () => {
     const b = t.apply(beat({ incident: "blackout" }), "chat");
     expect(b).toMatchObject({ action: "hold_candle", fx: "lightning", scene: { lights: "off" } });
     expect(b.story?.flags).toEqual(["blackout"]);
+    expect(b.story?.recent).toBe("blackout");
     expect(t.apply(beat({ incident: "blackout" }), "chat").incident).toBeUndefined();
   });
 
@@ -109,16 +110,18 @@ describe("StoryTurn 约束", () => {
 });
 
 describe("StoryTurn 每轮最多推进一步", () => {
-  it("推进阶段后，同一轮的事件被丢弃", () => {
+  it("推进阶段后，同一轮的内心推进被丢弃，外部意外仍可发生", () => {
     const t = new StoryTurn({ trust: 5, flags: [] });
     expect(t.apply(t.gate(beat({ plot: "reveal" }), "chat"), "chat").plot).toBe("reveal");
     expect(t.apply(t.gate(beat({ incident: "old_photo" }), "reveal"), "reveal").incident).toBeUndefined();
+    expect(t.apply(t.gate(beat({ incident: "blackout" }), "reveal"), "reveal").incident).toBe("blackout");
   });
 
-  it("一轮只能触发一个事件", () => {
+  it("外部意外每轮最多一个，可以和一次内心推进同轮发生", () => {
     const t = new StoryTurn({ trust: 5, flags: ["old_photo"] });
     expect(t.apply(beat({ incident: "blackout" }), "reveal").incident).toBe("blackout");
     expect(t.apply(beat({ incident: "doorbell" }), "reveal").incident).toBeUndefined();
+    expect(t.apply(beat({ incident: "note" }), "reveal").incident).toBe("note");
   });
 
   it("结局里的来电和到达不受限制", () => {
@@ -135,5 +138,68 @@ describe("StoryTurn 节奏", () => {
     expect(t.apply(beat({ incident: "blackout" }), "chat").story?.lastStep).toBe(6);
     const t2 = new StoryTurn({ trust: 5, flags: [] }, 7);
     expect(t2.apply(beat({ trust: 1 }), "chat").story?.lastStep).toBeUndefined();
+  });
+});
+
+describe("新场景：月亮 / 字条 / 手机 / 打烊", () => {
+  it("雨小了：天气转小雨、举相机、补上窗景照片", () => {
+    const b = new StoryTurn(INITIAL_STORY).apply(beat({ incident: "moon" }), "chat");
+    expect(b).toMatchObject({ action: "raise_camera", scene: { weather: "rain" } });
+    expect(b.event?.caption).toBe("雨小了的时候");
+  });
+
+  it("字条和手机要在旧照片之后；字条缺省时补默认文面，非 note 句上的 note 被去掉", () => {
+    expect(new StoryTurn(INITIAL_STORY).apply(beat({ incident: "note" }), "reveal").incident).toBeUndefined();
+    const t = new StoryTurn({ trust: 5, flags: ["old_photo"] });
+    expect(t.apply(beat({ incident: "note" }), "reveal").note).toContain("三年后");
+    expect(new StoryTurn({ trust: 5, flags: ["old_photo"] }).apply(beat({ note: "x" }), "reveal").note).toBeUndefined();
+    expect(new StoryTurn({ trust: 5, flags: ["old_photo"] }).apply(beat({ incident: "phone" }), "reveal").action).toBe("check_phone");
+  });
+
+  it("打烊提醒要在门铃之后，灯光减半", () => {
+    expect(new StoryTurn({ trust: 5, flags: ["old_photo"] }).apply(beat({ incident: "closing" }), "reveal").incident).toBeUndefined();
+    const b = new StoryTurn({ trust: 5, flags: ["old_photo", "doorbell"] }).apply(beat({ incident: "closing" }), "reveal");
+    expect(b.scene?.lights).toBe("dim");
+  });
+});
+
+describe("结局由门铃后的选择决定", () => {
+  it("满足重逢条件时，模型按用户的话标 letgo 则走释然；不能把释然升级成重逢", () => {
+    const t = new StoryTurn({ trust: 9, flags: ["doorbell"] });
+    expect(t.apply(applyPlotHooks(t.gate(beat({ plot: "ending", ending: "letgo" }), "reveal"), "reveal"), "reveal").story?.ending).toBe("letgo");
+    const t2 = new StoryTurn({ trust: 5, flags: ["doorbell"] });
+    expect(t2.apply(applyPlotHooks(t2.gate(beat({ plot: "ending", ending: "reunion" }), "reveal"), "reveal"), "reveal").story?.ending).toBe("letgo");
+  });
+});
+
+describe("阶段推进保底（时间表）", () => {
+  it("第 2 轮进入闲聊、第 6 轮进入吐露、打烊后第 13 轮进入结局；模型已标记时不改", () => {
+    expect(new StoryTurn(INITIAL_STORY, 1).nudge(beat({}), "meet").plot).toBeUndefined();
+    expect(new StoryTurn(INITIAL_STORY, 2).nudge(beat({}), "meet").plot).toBe("chat");
+    expect(new StoryTurn({ trust: 5, flags: [] }, 5).nudge(beat({}), "chat").plot).toBeUndefined();
+    expect(new StoryTurn({ trust: 5, flags: [] }, 6).nudge(beat({}), "chat").plot).toBe("reveal");
+    expect(new StoryTurn({ trust: 5, flags: ["old_photo", "doorbell"] }, 13).nudge(beat({}), "reveal").plot).toBeUndefined();
+    expect(new StoryTurn({ trust: 5, flags: ["old_photo", "doorbell", "closing"] }, 13).nudge(beat({}), "reveal").plot).toBe("ending");
+    expect(new StoryTurn(INITIAL_STORY, 2).nudge(beat({ plot: "reveal" }), "meet").plot).toBe("reveal");
+  });
+
+  it("过了期限还没发生的事件按顺序补一个；本轮已推进过就不补", () => {
+    expect(new StoryTurn({ trust: 5, flags: [] }, 3).due("chat")).toBeNull();
+    expect(new StoryTurn({ trust: 5, flags: [] }, 4).due("chat")).toBe("blackout");
+    expect(new StoryTurn({ trust: 5, flags: ["blackout"] }, 8).due("reveal")).toBe("moon");
+    expect(new StoryTurn({ trust: 5, flags: ["blackout", "moon"] }, 9).due("reveal")).toBe("old_photo");
+    expect(new StoryTurn({ trust: 5, flags: ["blackout", "moon", "old_photo", "note", "phone"] }, 11).due("reveal")).toBe("doorbell");
+    const t = new StoryTurn({ trust: 5, flags: [] }, 4);
+    t.apply(beat({ incident: "blackout" }), "chat");
+    expect(t.due("chat")).toBeNull();
+  });
+});
+
+describe("事件的前置条件", () => {
+  it("寒暄阶段不触发事件；门铃要在旧照片之后", () => {
+    expect(new StoryTurn(INITIAL_STORY).apply(beat({ incident: "doorbell" }), "meet").incident).toBeUndefined();
+    expect(new StoryTurn(INITIAL_STORY).apply(beat({ incident: "blackout" }), "meet").incident).toBeUndefined();
+    expect(new StoryTurn(INITIAL_STORY).apply(beat({ incident: "doorbell" }), "reveal").incident).toBeUndefined();
+    expect(new StoryTurn({ trust: 5, flags: ["old_photo"] }).apply(beat({ incident: "doorbell" }), "reveal").incident).toBe("doorbell");
   });
 });

@@ -31,6 +31,7 @@ const ACTION_SPRITE: Partial<Record<Action, string>> = {
   hold_candle: "act_candle",
   wipe_tears: "act_tears",
   wave: "act_wave",
+  check_phone: "act_phone",
 };
 // 動作の立ち絵には口形差分が無いので、話しながら口が止まって見える時間を短めにする
 const ACTION_MS = 2200;

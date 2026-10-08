@@ -81,6 +81,7 @@ const VARIANTS: Record<string, [string, string]> = {
   act_candle: ["neutral", "the room is dark: she holds a small lit white candle in both hands at chest height, warm candlelight from below illuminating her face and hands, the rest of her in soft shadow. The hands and candle are now visible."],
   act_tears: ["sad", "she gently wipes a tear from the corner of her eye with the knuckle of her right index finger, eyes lowered, a sad faint smile. The hand is now visible."],
   act_wave: ["happy", "she raises her right hand beside her face and waves goodbye with a warm smile. The hand is now visible."],
+  act_phone: ["neutral", "she holds a smartphone in her right hand at chest height, looking down at the glowing screen with a hesitant, uncertain expression, as if an unknown number is calling. The hand and phone are now visible."],
   act_window: ["neutral", "she turns her head toward her left to look out of an unseen window, a wistful three-quarter profile, eyes looking into the distance. Body pose unchanged."],
 };
 

@@ -100,6 +100,8 @@ export interface Snapshot {
   incident: { kind: Incident; nonce: number } | null;
   // 「こう返せる」候補。回合が終わって待機に戻ったときだけ出す
   choices: string[];
+  // 留言墙の字条。出来事 note の句で表示し、閉じるまで残す
+  note: { text: string; nonce: number } | null;
   subtitle: { who: "mira" | "user"; text: string; turnId: number } | null;
   photo: Photo | null;
   error: { code: string; message: string } | null;
@@ -124,6 +126,55 @@ interface Queued {
   audioError?: string;
 }
 
+// 開幕の 1 ターン目を、開場カードが表示されている間に取りに行って溜めておく。
+// 「推门进去」の時点で届いている分は即座に流し、未着の分は届き次第流す
+class Prefetch {
+  readonly ac = new AbortController();
+  private events: StreamEvent[] = [];
+  private finished = false;
+  failed = false;
+  private wake: (() => void) | null = null;
+
+  constructor(
+    readonly key: string,
+    readonly req: TurnRequest,
+    transport: Deps["transport"],
+  ) {
+    void (async () => {
+      try {
+        for await (const ev of transport(req, this.ac.signal)) {
+          this.events.push(ev);
+          this.wake?.();
+        }
+      } catch {
+        this.failed = true;
+      } finally {
+        this.finished = true;
+        this.wake?.();
+      }
+    })();
+  }
+
+  get usable() {
+    return !(this.finished && this.failed);
+  }
+
+  async *read(signal: AbortSignal): AsyncIterable<StreamEvent> {
+    let i = 0;
+    while (!signal.aborted) {
+      if (i < this.events.length) {
+        yield this.events[i++];
+        continue;
+      }
+      if (this.finished) {
+        if (this.failed) throw new Error("network");
+        return;
+      }
+      await new Promise<void>((r) => (this.wake = r));
+    }
+  }
+}
+
 export class TurnController {
   private s: Snapshot = {
     started: false,
@@ -138,6 +189,7 @@ export class TurnController {
     story: INITIAL_STORY,
     incident: null,
     choices: [],
+    note: null,
     subtitle: null,
     photo: null,
     error: null,
@@ -163,6 +215,7 @@ export class TurnController {
   private turnActive = false;
   private spoken: string[] = [];
   private pendingChoices: string[] = [];
+  private prefetched: Prefetch | null = null;
   private lastInput: TurnInput | null = null;
   private photoSeq = 0;
   private t0 = 0;
@@ -191,6 +244,34 @@ export class TurnController {
   private log(kind: string, detail?: string, turnId = this.s.turnId) {
     const log = [...this.s.log, { t: this.now(), turnId, kind, detail }];
     this.set({ log: log.length > 200 ? log.slice(-200) : log });
+  }
+
+  private prefetchKey() {
+    return `${this.forceMock}|${this.fail ?? ""}`;
+  }
+
+  // 開場カード表示中に呼ぶ。Mock や故障注入の設定が変わったら取り直す
+  prefetchStart() {
+    if (this.s.started) return;
+    const key = this.prefetchKey();
+    if (this.prefetched?.key === key && this.prefetched.usable) return;
+    this.prefetched?.ac.abort();
+    this.prefetched = new Prefetch(key, this.buildRequest({ kind: "start" }, this.turnSeq + 1, this.s.history), this.deps.transport);
+    this.log("prefetch", key, this.turnSeq + 1);
+  }
+
+  private buildRequest(input: TurnInput, turnId: number, history: HistoryItem[]): TurnRequest {
+    return {
+      sessionId: this.sessionId,
+      turnId,
+      input,
+      history,
+      scene: this.s.scene,
+      plot: this.s.plot,
+      story: this.s.story,
+      forceMock: this.forceMock,
+      fail: this.fail,
+    };
   }
 
   start() {
@@ -224,6 +305,10 @@ export class TurnController {
 
   clearError() {
     this.set({ error: null });
+  }
+
+  dismissNote() {
+    this.set({ note: null });
   }
 
   dismissPhoto() {
@@ -293,20 +378,21 @@ export class TurnController {
       if (epoch === this.epoch && !gotBeat) this.failTurn(epoch, "llm_timeout");
     }, this.deps.firstEventTimeoutMs ?? 20_000);
 
-    const req: TurnRequest = {
-      sessionId: this.sessionId,
-      turnId,
-      input,
-      history: isRetry && input.kind === "text" ? history.slice(0, -1) : history,
-      scene: this.s.scene,
-      plot: this.s.plot,
-      story: this.s.story,
-      forceMock: this.forceMock,
-      fail: this.fail,
-    };
+    const req = this.buildRequest(input, turnId, isRetry && input.kind === "text" ? history.slice(0, -1) : history);
+
+    // 開幕は先読み済みなら使う（設定が同じで、回合番号が一致し、失敗していないとき）
+    const pf = this.prefetched;
+    this.prefetched = null;
+    const usePf = !!pf && input.kind === "start" && !isRetry && pf.key === this.prefetchKey() && pf.req.turnId === turnId && pf.usable;
+    if (pf && !usePf) pf.ac.abort();
+    if (usePf) {
+      ac.signal.addEventListener("abort", () => pf.ac.abort(), { once: true });
+      this.log("prefetch_used", undefined, turnId);
+    }
+    const source = usePf ? pf.read(ac.signal) : this.deps.transport(req, ac.signal);
 
     try {
-      for await (const ev of this.deps.transport(req, ac.signal)) {
+      for await (const ev of source) {
         if (epoch !== this.epoch) return;
         if (ev.turnId !== turnId) {
           this.log("stale_dropped", ev.type, ev.turnId);
@@ -413,6 +499,7 @@ export class TurnController {
     if (beat.plot) patch.plot = beat.plot;
     if (beat.story) patch.story = beat.story;
     if (beat.incident) patch.incident = { kind: beat.incident, nonce: (this.s.incident?.nonce ?? 0) + 1 };
+    if (beat.note) patch.note = { text: beat.note, nonce: (this.s.note?.nonce ?? 0) + 1 };
     if (audioError) patch.notice = "语音合成失败，已降级为浏览器朗读/仅字幕";
     this.set(patch);
     this.spoken.push(beat.say);

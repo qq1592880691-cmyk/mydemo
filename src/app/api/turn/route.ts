@@ -2,7 +2,7 @@ import { getProvider } from "@/lib/providers";
 import { withTimeout } from "@/lib/providers/types";
 import { Beat, BeatAudio, INITIAL_STORY, StreamEvent, StutterLimiter, TurnRequest, normalizeBeat, normalizeChoices } from "@/lib/protocol";
 import { applyPlotHooks } from "@/lib/story";
-import { StoryTurn, userTurnOf } from "@/lib/storyState";
+import { FORCED_LINE, StoryTurn, userTurnOf } from "@/lib/storyState";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -119,6 +119,12 @@ export async function POST(req: Request) {
         chain = chain.then(() => emit(beat, voice, emitted++ === 0));
       };
       const stutter = new StutterLimiter();
+      // 直近の自分の発話をそのまま繰り返した句は捨てる（全部捨てると無言になるので、最後の 1 句だけは取っておく）
+      const recentMira = body.history.filter((h) => h.who === "mira").slice(-4).map((h) => h.text).join("\n");
+      const repeated = (say: string) => say.length >= 6 && recentMira.includes(say);
+      let heldBack: Record<string, unknown> | null = null;
+      // 1 ターンの普通の台詞は 3 句まで（筋を運ぶ句は数えない）
+      let plain = 0;
       try {
         const it = provider.reply(body, ac.signal)[Symbol.asyncIterator]();
         while (true) {
@@ -131,7 +137,11 @@ export async function POST(req: Request) {
             continue;
           }
           if ("choices" in obj) {
-            const items = normalizeChoices(obj.choices);
+            // ユーザーが最近言ったことと同じ候補は出さない（同じ質問の繰り返しを誘わない）
+            const said = new Set(
+              [...body.history.filter((h) => h.who === "user").slice(-8).map((h) => h.text), body.input.kind === "text" ? body.input.text : ""].map((t) => t.replace(/[。！？!?.，,\s]/g, "")),
+            );
+            const items = normalizeChoices(obj.choices).filter((c) => !said.has(c.replace(/[。！？!?.，,\s]/g, "")));
             // 台詞を全部流した後に届くよう、再生チェーンの最後に積む
             if (items.length) chain = chain.then(() => send({ type: "choices", turnId, items }));
             continue;
@@ -141,13 +151,44 @@ export async function POST(req: Request) {
           if (typeof raw.say === "string") raw.say = stutter.apply(raw.say);
           const norm = normalizeBeat(raw, seq);
           if (!norm) continue;
-          const beat = story.apply(applyPlotHooks(story.gate(norm, plot), plot), plot);
+          // 筋を運ぶ句（阶段・出来事・写真・结局）は繰り返しでも捨てない
+          const carriesStory = norm.plot || norm.incident || norm.event || norm.fin || norm.note || norm.ending;
+          if (!carriesStory && repeated(norm.say)) {
+            heldBack = raw;
+            continue;
+          }
+          if (!carriesStory && plain >= 3) continue;
+          if (!carriesStory) plain++;
+          const beat = story.apply(applyPlotHooks(story.gate(seq === 0 ? story.nudge(norm, plot) : norm, plot), plot), plot);
           if (beat.plot) plot = beat.plot;
           if (seq === 0) send({ type: "metric", turnId, name: "first_line", ms: Date.now() - t0 });
           const voice = new Voice();
           void synth(beat, voice);
           seq++;
           play(beat, voice);
+        }
+        // 時刻表で期限を過ぎた出来事を、この返事の最後の一句として補う
+        const forced = story.due(plot);
+        if (forced && FORCED_LINE[forced]) {
+          const line = FORCED_LINE[forced];
+          const norm = normalizeBeat({ say: line.say, emotion: line.emotion, action: "none", incident: forced }, seq);
+          if (norm) {
+            const beat = story.apply(norm, plot);
+            const voice = new Voice();
+            void synth(beat, voice);
+            seq++;
+            play(beat, voice);
+          }
+        }
+        if (seq === 0 && heldBack) {
+          const norm = normalizeBeat(heldBack, 0);
+          if (norm) {
+            const beat = story.apply(applyPlotHooks(story.gate(norm, plot), plot), plot);
+            const voice = new Voice();
+            void synth(beat, voice);
+            seq++;
+            play(beat, voice);
+          }
         }
         await chain;
         send({ type: "metric", turnId, name: "total", ms: Date.now() - t0 });
