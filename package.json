@@ -6,20 +6,29 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run",
+    "demo": "bash start.sh",
+    "sprites": "tsx scripts/gen-sprites.ts"
   },
   "dependencies": {
+    "@google/genai": "^2.28.0",
+    "better-sqlite3": "^12.11.1",
+    "next": "15.5.27",
     "react": "19.1.0",
-    "react-dom": "19.1.0",
-    "next": "15.5.27"
+    "react-dom": "19.1.0"
   },
   "devDependencies": {
-    "typescript": "^5",
+    "@eslint/eslintrc": "^3",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "15.5.27",
-    "@eslint/eslintrc": "^3"
+    "sharp": "^0.35.5",
+    "tsx": "^4.23.15",
+    "typescript": "^5",
+    "vitest": "^4.1.11"
   }
 }

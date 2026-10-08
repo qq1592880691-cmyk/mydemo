@@ -1,0 +1,21 @@
+html:has(.stats), body:has(.stats) { overflow: auto; height: auto; }
+.stats { max-width: 1200px; margin: 0 auto; padding: 24px 16px 60px; font-size: 13px; }
+.stats header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 16px; }
+.stats h1 { font-size: 22px; }
+.stats h2 { font-size: 15px; margin: 28px 0 10px; color: #ffcf8a; }
+.stats a { color: #8fc9ff; }
+.stats .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.stats .cards div { background: rgba(255,255,255,.05); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 4px; }
+.stats .cards b { font-size: 22px; }
+.stats .cards span { opacity: .6; }
+.stats .scroll { overflow-x: auto; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; }
+.stats table { width: 100%; border-collapse: collapse; white-space: nowrap; }
+.stats th, .stats td { padding: 6px 10px; text-align: left; border-bottom: 1px solid rgba(255,255,255,.06); }
+.stats th { background: rgba(255,255,255,.04); color: #b9b0a8; font-weight: 500; }
+.stats .mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+.stats tr.off { opacity: .4; }
+.stats .bad, .stats .st-error, .stats .st-timeout { color: #ff7b7b; }
+.stats .st-ok { color: #8fd19e; }
+.stats .st-aborted { color: #ffcf8a; }
+.stats .detail { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+.stats .note { margin-top: 16px; opacity: .55; }

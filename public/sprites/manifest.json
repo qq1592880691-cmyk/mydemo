@@ -1,0 +1,21 @@
+{
+  "width": 933,
+  "height": 1400,
+  "sprites": [
+    "neutral",
+    "happy",
+    "shy",
+    "sad",
+    "surprised",
+    "blink",
+    "talk_neutral",
+    "talk_happy",
+    "talk_shy",
+    "talk_sad",
+    "talk_surprised",
+    "act_sip",
+    "act_camera",
+    "act_hairpin",
+    "act_window"
+  ]
+}
