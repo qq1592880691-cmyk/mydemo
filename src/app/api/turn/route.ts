@@ -1,8 +1,8 @@
 import { getProvider } from "@/lib/providers";
 import { withTimeout } from "@/lib/providers/types";
-import { Beat, BeatAudio, INITIAL_STORY, StreamEvent, StutterLimiter, TurnRequest, normalizeBeat, normalizeChoices } from "@/lib/protocol";
+import { Beat, BeatAudio, INITIAL_STORY, StreamEvent, StutterLimiter, TurnRequest, dropRepeatedSentences, normalizeBeat, normalizeChoices } from "@/lib/protocol";
 import { applyPlotHooks } from "@/lib/story";
-import { FORCED_LINE, StoryTurn, userTurnOf } from "@/lib/storyState";
+import { FIN_LINE, FORCED_LINE, StoryTurn, userTurnOf } from "@/lib/storyState";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -149,10 +149,21 @@ export async function POST(req: Request) {
           // 字幕と合成用テキストが食い違わないよう、正規化前の台詞に掛ける
           const raw = obj as Record<string, unknown>;
           if (typeof raw.say === "string") raw.say = stutter.apply(raw.say);
+          const first = normalizeBeat(raw, seq);
+          if (!first) continue;
+          // 筋を運ぶ句（阶段・出来事・写真・结局）は繰り返しでも捨てない
+          const carriesStory = first.plot || first.incident || first.event || first.fin || first.note || first.ending;
+          // 前のターンで言った文は、句の中の一文単位で取り除く（全部が繰り返しなら句ごと見送る）
+          if (!carriesStory && typeof raw.say === "string") {
+            const rest = dropRepeatedSentences(raw.say, recentMira);
+            if (!rest) {
+              heldBack = raw;
+              continue;
+            }
+            raw.say = rest;
+          }
           const norm = normalizeBeat(raw, seq);
           if (!norm) continue;
-          // 筋を運ぶ句（阶段・出来事・写真・结局）は繰り返しでも捨てない
-          const carriesStory = norm.plot || norm.incident || norm.event || norm.fin || norm.note || norm.ending;
           if (!carriesStory && repeated(norm.say)) {
             heldBack = raw;
             continue;
@@ -180,6 +191,31 @@ export async function POST(req: Request) {
             play(beat, voice);
           }
         }
+        if (story.dueArrival(plot)) {
+          const line = FORCED_LINE.arrival;
+          const norm = normalizeBeat({ say: line.say, emotion: line.emotion, action: "look_door", incident: "arrival" }, seq);
+          if (norm) {
+            const beat = story.apply(norm, plot);
+            const voice = new Voice();
+            void synth(beat, voice);
+            seq++;
+            play(beat, voice);
+          }
+        }
+        // 結末の 2 ターン目で締めの一句が無ければ補う（結局卡が出ないまま終わらないように）
+        const fin = story.dueFin(plot);
+        if (fin) {
+          const norm = normalizeBeat({ ...FIN_LINE[fin], fin: true }, seq);
+          if (norm) {
+            const beat = story.apply(norm, plot);
+            const voice = new Voice();
+            void synth(beat, voice);
+            seq++;
+            play(beat, voice);
+          }
+        }
+        // モデルが台詞を 1 句も返さなかったターン（まれに起きる）は、黙り込まないよう短く返す
+        if (seq === 0 && !heldBack && !ac.signal.aborted) heldBack = { say: "嗯？你刚刚说什么，我有点走神了。", emotion: "shy", action: "touch_hairpin" };
         if (seq === 0 && heldBack) {
           const norm = normalizeBeat(heldBack, 0);
           if (norm) {

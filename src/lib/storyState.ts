@@ -33,18 +33,38 @@ export function userTurnOf(history: { who: string }[], inputKind: string): numbe
 
 const OUTER = new Set<Incident>(["blackout", "moon", "phone", "doorbell", "closing"]);
 
+// 出来事の印を付けた句が、その出来事に実際に触れているかの目安
+const INCIDENT_WORDS: Partial<Record<Incident, RegExp>> = {
+  blackout: /停电|灯|黑|蜡烛/,
+  moon: /月|雨小|雨停|云/,
+  old_photo: /照片|这张/,
+  note: /字条|留言|便利贴|写/,
+  phone: /手机|电话|号码|震/,
+  doorbell: /门铃|门|铃/,
+  closing: /打烊|店长|十分钟|关门/,
+  arrival: /门铃|门|他|来了/,
+};
+
 // 保底時刻表（何回目のユーザー発話までに起こすか）。モデルが早めに起こすのは自由で、遅れた分だけここで補う。
 // 15 ターン前後で結末まで届くように並べてある
 export const PLOT_DUE = { chat: 2, reveal: 6, ending: 13 } as const;
+// 手机は任意（時刻表に入れない）。門铃と打烊の間は 1 ターン空けて、門铃に反応する余地を残す
 const INCIDENT_DUE: [Incident, number][] = [
   ["blackout", 4],
   ["moon", 5],
-  ["old_photo", 8],
+  ["old_photo", 7],
   ["note", 9],
-  ["phone", 10],
-  ["doorbell", 11],
+  ["doorbell", 10],
   ["closing", 12],
 ];
+export const INCIDENT_DUE_AT: Record<string, number> = Object.fromEntries(INCIDENT_DUE);
+
+// 結末の 2 ターン目にモデルが fin を付け忘れたときの締めの一句
+export const FIN_LINE: Record<Ending, { say: string; emotion: Beat["emotion"]; action: Beat["action"] }> = {
+  reunion: { say: "谢谢你今晚陪我等。再见啦。", emotion: "happy", action: "wave" },
+  letgo: { say: "今晚，谢谢你。下次下雨再见。", emotion: "happy", action: "wave" },
+  farewell: { say: "晚安。路上小心。", emotion: "sad", action: "wave" },
+};
 
 // 期限切れで補う出来事の台詞。ターンの最後の一句として足す
 export const FORCED_LINE: Record<string, { say: string; emotion: Beat["emotion"] }> = {
@@ -55,6 +75,7 @@ export const FORCED_LINE: Record<string, { say: string; emotion: Beat["emotion"]
   phone: { say: "……我的手机响了，陌生号码。", emotion: "surprised" },
   doorbell: { say: "……门铃？", emotion: "surprised" },
   closing: { say: "嗯，店长在催了……", emotion: "sad" },
+  arrival: { say: "……门铃？是他……真的是他。", emotion: "surprised" },
 };
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -69,6 +90,7 @@ export class StoryTurn {
   private progressed = false;
   private outerDone = false;
   private stepped = false;
+  private enteredEnding = false;
   private readonly endingAtStart: Ending;
 
   // userTurn: このターンが何回目のユーザー発話か（userTurnOf と同じ数え方）
@@ -94,9 +116,25 @@ export class StoryTurn {
     if (this.stepped || plot === "meet" || plot === "ending") return null;
     const st = this.state;
     for (const [i, turn] of INCIDENT_DUE) {
-      if (this.userTurn >= turn && !st.flags.includes(i) && this.allowed(i, st, plot)) return i;
+      if (this.userTurn < turn || st.flags.includes(i) || !this.allowed(i, st, plot)) continue;
+      // 門铃の直後のターンは打烊を補わない（門铃への反応に使う）
+      if (i === "closing" && st.recent === "doorbell" && st.lastStep === this.userTurn - 1) continue;
+      return i;
     }
     return null;
+  }
+
+  // 重逢に入ったのに「彼が来る」場面が無ければ、そのターンの最後で補う
+  dueArrival(plot: PlotStage): boolean {
+    const st = this.state;
+    return plot === "ending" && st.ending === "reunion" && !st.flags.includes("arrival");
+  }
+
+  // 結末の 2 ターン目以降で、まだ締めていなければ締めの一句を返す
+  dueFin(plot: PlotStage): Ending | null {
+    const st = this.state;
+    if (plot !== "ending" || !st.ending || st.fin || this.enteredEnding) return null;
+    return st.ending;
   }
 
   // applyPlotHooks より前に呼ぶ。門铃が鳴る前の結末入りは無効にし、重逢の伏線を必ず通す
@@ -126,6 +164,7 @@ export class StoryTurn {
     if (beat.plot === "ending" && !st.ending) {
       // 重逢の条件を満たしていても、門铃の後にユーザーが「放下」を勧めたなら释然にする（選択が結末を決める）
       st.ending = this.endingAtStart === "reunion" && beat.ending === "letgo" ? "letgo" : this.endingAtStart;
+      this.enteredEnding = true;
       changed = true;
       // 停電のまま結末に入ったら灯りを戻す
       if (st.flags.includes("blackout") && !st.flags.includes("lights_on")) {
@@ -144,7 +183,9 @@ export class StoryTurn {
       const free = beat.incident === "lights_on" || beat.incident === "arrival";
       const outer = OUTER.has(beat.incident);
       const room = free || (outer ? !this.outerDone : !this.progressed);
-      if (this.allowed(beat.incident, st, plot) && room) {
+      // 台詞がその出来事に触れていない句に付いた印は無効（音や演出が無関係な台詞に重ならないように）
+      const fits = !INCIDENT_WORDS[beat.incident] || INCIDENT_WORDS[beat.incident]!.test(beat.say);
+      if (this.allowed(beat.incident, st, plot) && room && fits) {
         if (!free) {
           if (outer) this.outerDone = true;
           else this.progressed = true;
@@ -161,8 +202,12 @@ export class StoryTurn {
 
     delete beat.ending;
 
-    // 字条の文面は「note」の出来事が成立した句にだけ残す
+    // 字条の文面は「note」の出来事が成立した句にだけ残し、状態にも覚えておく
     if (beat.incident !== "note") delete beat.note;
+    else if (beat.note && st.noteText !== beat.note) {
+      st.noteText = beat.note;
+      changed = true;
+    }
 
     // 写真（生図）は 1 ターン 1 枚まで
     if (beat.event) {
@@ -171,7 +216,8 @@ export class StoryTurn {
     }
 
     if (beat.fin) {
-      const inEnding = plot === "ending" || st.ending !== undefined;
+      // 結末に入ったターンでは締めない（山場と別れを 2 ターンに分ける）
+      const inEnding = (plot === "ending" || st.ending !== undefined) && !this.enteredEnding;
       if (inEnding && !st.fin) {
         st.fin = true;
         changed = true;

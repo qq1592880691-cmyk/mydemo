@@ -51,6 +51,8 @@ export interface StoryState {
   lastStep?: number;
   // 直近に起きた出来事。次のターンでまずそれに反応させる
   recent?: Incident;
+  // 留言墙の字条に実際に表示した文面。以後の台詞で食い違わないよう prompt に渡す
+  noteText?: string;
 }
 
 export const INITIAL_STORY: StoryState = { trust: 4, flags: [] };
@@ -142,6 +144,18 @@ export function normalizeChoices(raw: unknown): string[] {
     if (out.length === 3) break;
   }
   return out;
+}
+
+// 直近の自分の発話に既にある文を台詞から取り除く（6 字以上の文が対象。言い換えは検出しない）
+export function dropRepeatedSentences(say: string, recent: string): string {
+  const parts = say.match(/[^。！？!?…]+[。！？!?…]*/g) ?? [say];
+  return parts
+    .filter((p) => {
+      const plain = stripVoiceTags(p).replace(/[。！？!?…，,\s]/g, "");
+      return plain.length < 6 || !recent.replace(/[。！？!?…，,\s]/g, "").includes(plain);
+    })
+    .join("")
+    .trim();
 }
 
 // 「你、你」「这、这」のような吃音の重ね。モデルが多用しがちなので 1 ターン 1 回までに減らす

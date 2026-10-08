@@ -1,5 +1,5 @@
 import { Beat, Ending, HistoryItem, INITIAL_STORY, PLOT_ORDER, PlotStage, SceneState, StoryState, TurnInput } from "./protocol";
-import { pickEnding, userTurnOf } from "./storyState";
+import { INCIDENT_DUE_AT, PLOT_DUE, pickEnding, userTurnOf } from "./storyState";
 
 export const PLOT_GUIDE: Record<PlotStage, string> = {
   meet: "初遇。暴雨夜，咖啡馆快打烊，只剩你和用户。你有些意外有人进来，礼貌但保持距离。",
@@ -8,19 +8,22 @@ export const PLOT_GUIDE: Record<PlotStage, string> = {
   ending: "收尾。按下面「结局走向」演完今晚。",
 };
 
-export const ENDING_GUIDE: Record<Ending, { title: string; guide: string }> = {
+// 結末は 2 ターンで演じる：入るターンで山場（enter）、次のターンで感謝と別れ（close, fin）
+export const ENDING_GUIDE: Record<Ending, { title: string; enter: string; close: string }> = {
   reunion: {
     title: "重逢",
-    guide:
-      '重逢。你被用户的鼓励打动，决定再等一会儿。门铃又响了——这次真的是他（在那一句加 "incident":"arrival"）。你又惊又喜、眼眶发热，回头向用户道谢，挥手（action wave），起身去把照片交给他。雨停了。',
+    enter: '你被用户的鼓励打动，决定再等一会儿。门铃又响了——这次真的是他（在那一句加 "incident":"arrival"）。你又惊又喜，一下子说不出话。这一轮到这里为止，先不要道别。',
+    close: "你眼眶发热，回头向用户道谢（他让你没有放弃），挥手（action wave）说再见，起身去把照片交给他。雨停了。",
   },
   letgo: {
     title: "释然",
-    guide: "释然。雨停了（scene.weather 设为 clear）。你笑着说不再等了，谢谢用户今晚陪你，最后举起相机给用户拍一张照片作为纪念（action raise_camera + event photo）。",
+    enter: "雨停了（scene.weather 设为 clear）。你望着窗外，笑着说决定不再等了，心里反而轻松了。这一轮到这里为止，先不要道别。",
+    close: "你谢谢用户今晚陪你，举起相机给用户拍一张照片作为今晚的纪念（action raise_camera + event photo），然后道别。",
   },
   farewell: {
     title: "告别",
-    guide: "告别。今晚你没能和用户真正聊开，有点失落。你礼貌地说店要打烊了，悄悄擦掉眼泪（action wipe_tears），然后挥手道别（action wave）。不拍照，雨还在下。",
+    enter: "今晚你没能和用户真正聊开，有点失落。你礼貌地说店要打烊了，悄悄擦掉眼泪（action wipe_tears）。这一轮到这里为止，先不要道别。",
+    close: "你收起照片，挥手道别（action wave），说一句晚安。不拍照，雨还在下。",
   },
 };
 
@@ -37,6 +40,8 @@ export const SYSTEM_PROMPT = `你是 Mira，26 岁的旅行摄影师（原创成
 - 你问过用户的问题，他回答了就要接着他的回答聊，不要自顾自换话题。
 - 通常 1~2 句，最多 3 句，每句不超过 25 个字。用户问什么就先直接回答，不要绕。
 - 不要重复你之前说过的句子或意思。三年前的往事已经讲过的部分不要再讲第二遍，每轮最多往前讲一点新的；用户换个说法再问同一件事时，简短回应后把话题往前带。
+- 已经发生过的事（停电、月亮出来、字条、门铃等）提过一次就够了，后面不要反复提起。
+- say 里只写你自己说的话，不要替用户说话或提问。
 
 ## 输出协议（严格遵守）
 只输出 NDJSON：每行一个 JSON 对象，不要代码块，不要其他文字。
@@ -62,7 +67,8 @@ export function buildUserPrompt(input: TurnInput, history: HistoryItem[], scene:
     h.who === "user" ? `用户：${h.text}` : `Mira：${h.text}${h.interrupted ? "（话没说完就被用户打断了）" : ""}`,
   );
   const userTurns = history.filter((h) => h.who === "user").length;
-  const hints = storyHints(plot, story, userTurns, userTurnOf(history, input.kind) - (story.lastStep ?? 0));
+  const cur = userTurnOf(history, input.kind);
+  const hints = storyHints(plot, story, userTurns, cur - (story.lastStep ?? 0), cur);
   // 前のターンの終わりに起きた出来事には、このターンでまず一言反応させる（電話や門铃を無視したまま流さない）
   if (story.recent && story.lastStep === userTurnOf(history, input.kind) - 1 && REACT[story.recent])
     hints.unshift(`上一轮最后刚发生：${REACT[story.recent]} 这一轮先用一句话对它做出反应，再回应用户。`);
@@ -74,7 +80,7 @@ export function buildUserPrompt(input: TurnInput, history: HistoryItem[], scene:
         : '（用户这轮是语音，见附带音频。第一行必须先输出 {"heard":"<用户语音的转写>"}，再输出表演节拍。如果音频里听不清或没有人声，heard 输出空字符串，不要猜测或编造，然后只用一句话请对方再说一遍。）';
   return `## 当前状态
 剧情阶段：${plot} —— ${PLOT_GUIDE[plot]}
-天气：${scene.weather}；镜头：${scene.camera}；灯光：${scene.lights === "off" ? "停电了，只有烛光" : "正常"}
+天气：${scene.weather}；镜头：${scene.camera}；灯光：${scene.lights === "off" ? "停电了，只有烛光" : scene.lights === "dim" ? "暗了一半（快打烊了）" : "正常"}${story.noteText ? `\n留言墙上他的字条原文：「${story.noteText}」（提到时必须和原文一致）` : ""}
 ${hints.map((h) => `提示：${h}`).join("\n")}
 
 ## 对话记录
@@ -87,51 +93,62 @@ ${current}`;
 // 阶段と経過ターンから、今回起こしてよい出来事と結末の筋書きを指示する
 // gap: 物語が最後に進んでから何ターン経ったか。小さいうちは「起こしてよい」、空いてきたら「起こして」と強める。
 // 停電・門铃は外から来る出来事なので雑談の最中でも割り込めるが、写真や決心は相手が真剣なときだけにする
-function storyHints(plot: PlotStage, story: StoryState, userTurns: number, gap: number): string[] {
+function storyHints(plot: PlotStage, story: StoryState, userTurns: number, gap: number, cur: number): string[] {
   const has = (f: string) => story.flags.some((x) => x === f);
   const hints: string[] = [];
   const soft = "（只在用户也在认真聊、或对话冷场时；用户在开玩笑或聊别的就先陪他聊，留到以后）";
-  const inner = (what: string, strongAt: number) =>
-    gap >= strongAt ? `${what}——已经聊了一阵了，只要用户不是在开玩笑，本轮先回应他，再自然地做这件事。` : `${what}${soft}。`;
-  const outer = (what: string, strongAt: number) =>
-    gap >= strongAt ? `${what}——本轮必须发生：先接住用户这句话，然后在最后一句触发（外面来的意外，可以打断闲聊）。` : `${what}${soft}。`;
+  // 時刻表の期限の 1 ターン前からは「必ず」と伝え、服务端の補いに頼らずモデル自身に書かせる
+  const must = (i: string) => INCIDENT_DUE_AT[i] !== undefined && cur >= INCIDENT_DUE_AT[i] - 1;
+  const inner = (i: string, what: string, strongAt: number) =>
+    must(i)
+      ? `${what}——本轮必须做到：先回应用户这句话，再自然地做这件事。`
+      : gap >= strongAt
+        ? `${what}——已经聊了一阵了，只要用户不是在开玩笑，本轮先回应他，再自然地做这件事。`
+        : `${what}${soft}。`;
+  const outer = (i: string, what: string, strongAt: number) =>
+    must(i) || gap >= strongAt ? `${what}——本轮必须发生：先接住用户这句话，然后在最后一句触发（外面来的意外，可以打断闲聊）。` : `${what}${soft}。`;
 
-  if (plot === "meet" && userTurns >= 1) hints.push(inner("可以从寒暄自然转入闲聊（plot chat）", 3));
+  if (plot === "meet" && userTurns >= 1) hints.push(inner("chat", "可以从寒暄自然转入闲聊（plot chat）", 3));
   if ((plot === "chat" || (plot === "reveal" && !has("old_photo"))) && !has("blackout") && userTurns >= 2 && gap >= 1)
-    hints.push(outer('可以触发停电：窗外一道闪电后灯灭了，在那一句加 "incident":"blackout"；你点起一支蜡烛（action hold_candle），气氛变得更私密', 3));
-  if (plot === "chat" && (has("blackout") || userTurns >= 6) && gap >= 1)
-    hints.push(inner("用户问起你在等谁、或关心你时，可以开始吐露心事（plot reveal）", 3));
+    hints.push(outer("blackout", '可以触发停电：窗外一道闪电后灯灭了，在那一句加 "incident":"blackout"；你点起一支蜡烛（action hold_candle），气氛变得更私密', 3));
+  if ((plot === "chat" || (plot === "reveal" && !has("doorbell"))) && !has("moon") && userTurns >= 2 && gap >= 1)
+    hints.push(outer("moon", '可以触发雨小了：雨势忽然变小，窗外的云散开露出月亮（"incident":"moon"），你兴奋地拉用户一起看，举起相机拍窗外', 3));
+  if (plot === "chat" && (has("blackout") || userTurns >= 4) && gap >= 1)
+    hints.push(
+      cur >= PLOT_DUE.reveal - 1
+        ? "本轮请开始吐露心事（在第一或第二句标 plot reveal）：承认你在等一个三年前遇到的人。"
+        : inner("reveal", "用户问起你在等谁、或关心你时，可以开始吐露心事（plot reveal）", 3),
+    );
   if (has("blackout") && !has("lights_on") && PLOT_ORDER[plot] >= PLOT_ORDER.reveal)
     hints.push('可以让电恢复：在某一句加 "incident":"lights_on"（也可以继续在烛光里聊）。');
   if (plot === "reveal" && !has("old_photo") && gap >= 1)
-    hints.push(inner('可以拿出三年前那张照片给用户看：在那一句加 "incident":"old_photo"，action give_photo', 2));
-  if ((plot === "chat" || (plot === "reveal" && !has("doorbell"))) && !has("moon") && userTurns >= 2 && gap >= 1)
-    hints.push(outer('可以触发雨小了：雨势忽然变小，窗外的云散开露出月亮（"incident":"moon"），你兴奋地拉用户一起看，举起相机拍窗外', 3));
+    hints.push(inner("old_photo", '可以拿出三年前那张照片给用户看：在那一句加 "incident":"old_photo"，action give_photo', 2));
   if (plot === "reveal" && has("old_photo") && !has("note") && gap >= 1)
-    hints.push(inner('可以带用户看墙角的留言墙：三年前他在一张便利贴上给你留了话（"incident":"note"，并用 "note" 写出便利贴原文）', 3));
-  if (plot === "reveal" && has("old_photo") && !has("phone") && gap >= 1)
+    hints.push(inner("note", '可以带用户看墙角的留言墙：三年前他在一张便利贴上给你留了话（"incident":"note"，并用 "note" 写出便利贴原文）', 3));
+  if (plot === "reveal" && has("old_photo") && !has("phone") && !has("doorbell") && gap >= 1)
     hints.push(
-      outer('可以触发手机响：你的手机突然震动，是一个陌生号码（"incident":"phone"，action check_phone）。你犹豫要不要接，问用户的意见，先别揭晓是谁；本轮选项的第 2、3 个写成类似「别接了」和「接吧，说不定是他」', 3),
+      `可以触发手机响（可选）：你的手机突然震动，是一个陌生号码（"incident":"phone"，action check_phone）。你犹豫要不要接，问用户的意见，先别揭晓是谁；本轮选项的第 2、3 个写成类似「别接了」和「接吧，说不定是他」${soft}。`,
     );
   if (plot === "reveal" && has("old_photo") && !has("doorbell") && gap >= 1)
-    hints.push(outer('可以触发门铃：门铃突然响了，你猛地望向门口（"incident":"doorbell"），结果只是风把门吹开了', has("note") || has("phone") ? 2 : 4));
-  if (plot === "reveal" && has("doorbell") && !has("closing") && gap >= 1)
-    hints.push(outer('可以触发打烊提醒：店长在后厨喊"还有十分钟就打烊了"（"incident":"closing"，不用替店长说台词，只写你听到后的反应），灯暗了一半，你意识到该做决定了', 2));
+    hints.push(outer("doorbell", '可以触发门铃：门铃突然响了，你猛地望向门口（"incident":"doorbell"），结果只是风把门吹开了', 4));
+  // 門铃の直後のターンは、門铃への反応に使わせる（打烊を重ねない）
+  if (plot === "reveal" && has("doorbell") && !has("closing") && !(story.recent === "doorbell" && story.lastStep === cur - 1))
+    hints.push(outer("closing", '可以触发打烊提醒：店长在后厨喊"还有十分钟就打烊了"（"incident":"closing"，不用替店长说台词，只写你听到后的反应），灯暗了一半，你意识到该做决定了', 3));
   if (plot === "reveal" && !has("doorbell")) hints.push("门铃事件发生之前，不要推进到 ending。");
-  if (plot === "reveal" && has("doorbell") && gap >= 1) {
+  if (plot === "reveal" && has("doorbell") && has("closing")) {
     const ending = pickEnding(story);
     const guide =
       ending === "reunion"
-        ? `结局走向由用户的话决定：用户劝你再等、说要陪你等 → ${ENDING_GUIDE.reunion.guide} 在进入 ending 的那句加 "ending":"reunion"。用户劝你放下、别等了 → ${ENDING_GUIDE.letgo.guide} 在进入 ending 的那句加 "ending":"letgo"。`
-        : `结局走向：${ENDING_GUIDE[ending].guide}`;
+        ? `结局走向由用户的话决定：用户劝你再等、说要陪你等 → ${ENDING_GUIDE.reunion.enter} 在进入 ending 的那句加 "ending":"reunion"。用户劝你放下、别等了 → ${ENDING_GUIDE.letgo.enter} 在进入 ending 的那句加 "ending":"letgo"。`
+        : `结局走向：${ENDING_GUIDE[ending].enter}`;
     hints.push(
-      gap >= (has("closing") ? 1 : 3)
-        ? `本轮请推进到 ending：先回应用户，然后在第一或第二句标 "plot":"ending"，按结局走向演，可以在同一轮演完并在最后一句加 "fin":true。${guide}`
-        : `用户鼓励你、陪着你、或劝你放下时，就是下定决心的时机，可以推进到 ending（plot ending）。${guide}`,
+      cur >= PLOT_DUE.ending - 1 || (story.lastStep ?? 0) < cur - 1
+        ? `本轮请推进到 ending：先回应用户，然后标 "plot":"ending"。${guide} 本轮不要加 fin。`
+        : `用户鼓励你、陪着你、或劝你放下时，就是下定决心的时机，可以推进到 ending（plot ending）。${guide} 进入 ending 的这一轮不要加 fin。`,
     );
   }
   if (plot === "ending" && story.ending && !story.fin)
-    hints.push(`结局走向（已确定）：${ENDING_GUIDE[story.ending].guide} 先回应用户这句话，再把结局演完，最后一句加 "fin":true。`);
+    hints.push(`结局（已确定：${ENDING_GUIDE[story.ending].title}）的后半段：${ENDING_GUIDE[story.ending].close} 先回应用户这句话，再演这一段，最后一句加 "fin":true。`);
   if (story.fin) hints.push("结局已经演完。简短地回应用户，像故事结束后的余韵。");
   const push = choiceHint(plot, story);
   if (push) hints.push(`推动剧情的选项：${push}`);

@@ -46,7 +46,7 @@ const SCRIPT = {
     },
   ],
   blackout: [
-    { say: "诶——", emotion: "surprised", action: "look_window", incident: "blackout" },
+    { say: "诶——停电了？", emotion: "surprised", action: "look_window", incident: "blackout" },
     { say: "停电了……别怕，我包里有蜡烛。", emotion: "neutral", action: "hold_candle" },
     { say: "这样也挺好的，像在露营。", emotion: "happy", action: "chin_rest" },
   ],
@@ -62,7 +62,7 @@ const SCRIPT = {
   ],
   note: [
     { say: "其实……那天他走之前，在墙角的留言墙上贴了一张便利贴。", emotion: "shy", action: "look_window" },
-    { say: "就是这张，我一直没舍得撕。", emotion: "shy", action: "touch_hairpin", incident: "note", note: "谢谢你的照片。三年后的今天，我会回来取。——一个躲雨的人" },
+    { say: "就是这张便利贴，我一直没舍得撕。", emotion: "shy", action: "touch_hairpin", incident: "note", note: "谢谢你的照片。三年后的今天，我会回来取。——一个躲雨的人" },
   ],
   phone: [
     { say: "嗯……我也不知道他还记不记得。", emotion: "sad", action: "none" },
@@ -74,7 +74,7 @@ const SCRIPT = {
     { say: "十分钟……我得做个决定了。", emotion: "sad", action: "touch_hairpin" },
   ],
   doorbell: [
-    { say: "……！", emotion: "surprised", action: "look_door", incident: "doorbell" },
+    { say: "……！门铃？", emotion: "surprised", action: "look_door", incident: "doorbell" },
     { say: "……是风啊。", emotion: "sad", action: "none" },
     { say: "你说，我还要再等下去吗？", emotion: "shy", action: "chin_rest" },
   ],
@@ -82,11 +82,17 @@ const SCRIPT = {
     { say: "嗯……那我再等一会儿。谢谢你。", emotion: "happy", action: "nod", plot: "ending" },
     { say: "……门铃？", emotion: "surprised", action: "look_door", incident: "arrival" },
     { say: "是他……真的是他。", emotion: "happy", action: "wipe_tears", fx: "sparkle" },
-    { say: "谢谢你今晚陪我等。再见啦。", emotion: "happy", action: "wave", fin: true },
+  ],
+  reunion_end: [
+    { say: "谢谢你今晚陪我等，要不是你，我可能早就走了。", emotion: "happy", action: "nod" },
+    { say: "我去把照片交给他啦。再见！", emotion: "happy", action: "wave", fin: true },
   ],
   letgo: [
     { say: "真的……雨停了。", emotion: "surprised", action: "look_window", plot: "ending", ending: "letgo" },
     { say: "也许我等的不是他，是一个能好好告别的晚上。", emotion: "happy", action: "touch_hairpin", fx: "sparkle" },
+  ],
+  letgo_end: [
+    { say: "谢谢你今晚陪我。", emotion: "happy", action: "nod" },
     {
       say: "来，看镜头——今晚的纪念。",
       emotion: "happy",
@@ -98,6 +104,8 @@ const SCRIPT = {
   farewell: [
     { say: "……嗯。时间不早了，店要打烊了。", emotion: "sad", action: "look_window", plot: "ending" },
     { say: "没什么，只是雨太大了。", emotion: "sad", action: "wipe_tears" },
+  ],
+  farewell_end: [
     { say: "路上小心。晚安。", emotion: "neutral", action: "wave", fin: true },
   ],
   after: [
@@ -123,9 +131,12 @@ const CHOICES = new Map<Raw[], string[]>([
   [SCRIPT.phone, ["说不定是推销电话", "别接了", "接吧，说不定是他"]],
   [SCRIPT.closing, ["算了，关我什么事", "也许该放下了", "我陪你再等一会儿"]],
   [SCRIPT.doorbell, ["吓我一跳", "原来是风啊", "你还要继续等吗？"]],
-  [SCRIPT.reunion, ["祝你们好好的", "谢谢你今晚的故事"]],
-  [SCRIPT.letgo, ["这张照片我会留着", "下次下雨再见"]],
-  [SCRIPT.farewell, ["晚安，路上小心", "对不起，打扰了"]],
+  [SCRIPT.reunion, ["快去吧", "他看起来怎么样？", "真为你高兴"]],
+  [SCRIPT.letgo, ["你笑起来真好看", "雨停了呢", "那你接下来去哪？"]],
+  [SCRIPT.farewell, ["对不起，打扰了", "你还好吗？", "那我先走了"]],
+  [SCRIPT.reunion_end, ["祝你们好好的", "谢谢你今晚的故事"]],
+  [SCRIPT.letgo_end, ["这张照片我会留着", "下次下雨再见"]],
+  [SCRIPT.farewell_end, ["晚安，路上小心"]],
   [SCRIPT.after, ["晚安", "再见啦"]],
 ]);
 
@@ -135,7 +146,7 @@ const RUDE = /无聊|关我什么事|烦|滚|随便|快点|没意思|算了吧/;
 function pickScript(text: string, plot: PlotStage, story: StoryState, userTurns: number): Raw[] {
   const has = (f: string) => story.flags.some((x) => x === f);
   if (story.fin) return SCRIPT.after;
-  if (plot === "ending") return SCRIPT[story.ending ?? "letgo"];
+  if (plot === "ending") return SCRIPT[`${story.ending ?? "letgo"}_end`];
   if (plot === "reveal") {
     if (!has("old_photo")) return SCRIPT.reveal;
     if (!has("note")) return SCRIPT.note;

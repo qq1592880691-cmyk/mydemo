@@ -1,9 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { INITIAL_STORY, normalizeBeat, type Beat, type StoryState } from "@/lib/protocol";
+import { INITIAL_STORY, normalizeBeat, type Beat, type Incident, type StoryState } from "@/lib/protocol";
 import { applyPlotHooks } from "@/lib/story";
 import { OLD_PHOTO, StoryTurn, pickEnding } from "@/lib/storyState";
 
-const beat = (raw: Record<string, unknown>): Beat => normalizeBeat({ say: "嗯。", ...raw }, 0)!;
+// 事件付きの句は、その事件に触れた台詞にしておく（台詞と事件の整合チェックがあるため）
+const SAY: Record<string, string> = {
+  blackout: "停电了。",
+  moon: "月亮出来了。",
+  old_photo: "就是这张照片。",
+  note: "这是他的字条。",
+  phone: "手机响了。",
+  doorbell: "门铃？",
+  closing: "店长在催打烊了。",
+  arrival: "是他，他来了。",
+};
+const beat = (raw: Record<string, unknown>): Beat => normalizeBeat({ say: SAY[raw.incident as string] ?? "嗯。", ...raw }, 0)!;
 
 describe("normalizeBeat 剧情字段", () => {
   it("trust 取整并限幅，0 不保留；未知 incident 丢弃", () => {
@@ -87,6 +98,15 @@ describe("StoryTurn", () => {
     expect(b.story?.flags).toContain("lights_on");
   });
 
+  it("进入结局的那一轮不能 fin；下一轮没 fin 时 dueFin 给出补句", () => {
+    const t = new StoryTurn({ trust: 5, flags: ["old_photo", "doorbell"] }, 13);
+    const b = t.apply(applyPlotHooks(t.gate(beat({ plot: "ending", fin: true }), "reveal"), "reveal"), "reveal");
+    expect(b.story?.ending).toBe("letgo");
+    expect(b.story?.fin).toBeUndefined();
+    expect(t.dueFin("ending")).toBeNull();
+    expect(new StoryTurn({ trust: 5, flags: [], ending: "letgo" }, 14).dueFin("ending")).toBe("letgo");
+  });
+
   it("fin 只在结局阶段有效", () => {
     expect(new StoryTurn(INITIAL_STORY).apply(beat({ fin: true }), "chat").fin).toBeUndefined();
     const t = new StoryTurn({ trust: 5, flags: [], ending: "letgo" });
@@ -151,7 +171,9 @@ describe("新场景：月亮 / 字条 / 手机 / 打烊", () => {
   it("字条和手机要在旧照片之后；字条缺省时补默认文面，非 note 句上的 note 被去掉", () => {
     expect(new StoryTurn(INITIAL_STORY).apply(beat({ incident: "note" }), "reveal").incident).toBeUndefined();
     const t = new StoryTurn({ trust: 5, flags: ["old_photo"] });
-    expect(t.apply(beat({ incident: "note" }), "reveal").note).toContain("三年后");
+    const nb = t.apply(beat({ incident: "note" }), "reveal");
+    expect(nb.note).toContain("三年后");
+    expect(nb.story?.noteText).toBe(nb.note);
     expect(new StoryTurn({ trust: 5, flags: ["old_photo"] }).apply(beat({ note: "x" }), "reveal").note).toBeUndefined();
     expect(new StoryTurn({ trust: 5, flags: ["old_photo"] }).apply(beat({ incident: "phone" }), "reveal").action).toBe("check_phone");
   });
@@ -203,3 +225,36 @@ describe("事件的前置条件", () => {
     expect(new StoryTurn({ trust: 5, flags: ["old_photo"] }).apply(beat({ incident: "doorbell" }), "reveal").incident).toBe("doorbell");
   });
 });
+
+describe("后半段节奏", () => {
+  it("门铃刚响的下一轮不补打烊，再下一轮才补", () => {
+    const st = { trust: 5, flags: ["blackout", "moon", "old_photo", "note", "doorbell"] as Incident[], recent: "doorbell" as Incident, lastStep: 11 };
+    expect(new StoryTurn(st, 12).due("reveal")).toBeNull();
+    expect(new StoryTurn(st, 13).due("reveal")).toBe("closing");
+  });
+
+  it("手机响不在保底时间表里", () => {
+    expect(new StoryTurn({ trust: 5, flags: ["blackout", "moon", "old_photo", "note"] }, 9).due("reveal")).toBeNull();
+  });
+});
+
+describe("事件要和台词对得上", () => {
+  it("台词没提到门铃/打烊时，事件标记被去掉", () => {
+    const st = { trust: 5, flags: ["old_photo"] as Incident[] };
+    expect(normalizeAndApply(st, { say: "你看那边墙角，是不是有个留言墙？", incident: "doorbell" }).incident).toBeUndefined();
+    expect(normalizeAndApply(st, { say: "……门铃？", incident: "doorbell" }).incident).toBe("doorbell");
+    expect(normalizeAndApply({ trust: 5, flags: ["old_photo", "doorbell"] }, { say: "我们去看看就知道了。", incident: "closing" }).incident).toBeUndefined();
+  });
+
+  it("进入重逢但没有他出现时，dueArrival 为真", () => {
+    const t = new StoryTurn({ trust: 9, flags: ["old_photo", "doorbell"] }, 13);
+    t.apply(applyPlotHooks(t.gate(beat({ plot: "ending", ending: "reunion" }), "reveal"), "reveal"), "reveal");
+    expect(t.dueArrival("ending")).toBe(true);
+    t.apply(beat({ say: "……门铃？是他。", incident: "arrival" }), "ending");
+    expect(t.dueArrival("ending")).toBe(false);
+  });
+});
+
+function normalizeAndApply(st: StoryState, raw: Record<string, unknown>) {
+  return new StoryTurn(st, 10).apply(normalizeBeat(raw, 0)!, "reveal");
+}
