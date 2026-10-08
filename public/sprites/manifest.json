@@ -1,6 +1,7 @@
 {
   "width": 933,
   "height": 1400,
+  "model": "openai/gpt-image-2.5-sunburst",
   "sprites": [
     "neutral",
     "happy",
@@ -13,9 +14,26 @@
     "talk_shy",
     "talk_sad",
     "talk_surprised",
+    "half_neutral",
+    "half_happy",
+    "half_shy",
+    "half_sad",
+    "half_surprised",
+    "o_neutral",
+    "o_happy",
+    "o_shy",
+    "o_sad",
+    "o_surprised",
     "act_sip",
     "act_camera",
     "act_hairpin",
+    "act_chin",
+    "act_laugh",
+    "act_photo",
+    "act_door",
+    "act_candle",
+    "act_tears",
+    "act_wave",
     "act_window"
   ]
 }

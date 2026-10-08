@@ -153,9 +153,14 @@ export function Lamps() {
   );
 }
 
-export function Table() {
+export function Table({ candle = false }: { candle?: boolean }) {
   return (
     <div className="table" aria-hidden>
+      {candle && (
+        <div className="candle">
+          <i />
+        </div>
+      )}
       <div className="cup">
         <div className="steam s1" />
         <div className="steam s2" />

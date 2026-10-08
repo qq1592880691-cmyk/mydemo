@@ -7,8 +7,11 @@ import {
   FailMode,
   Fx,
   HistoryItem,
+  INITIAL_STORY,
+  Incident,
   PlotStage,
   SceneState,
+  StoryState,
   StreamEvent,
   TurnInput,
   TurnRequest,
@@ -92,6 +95,11 @@ export interface Snapshot {
   fxNonce: number;
   scene: SceneState;
   plot: PlotStage;
+  story: StoryState;
+  // 効果音など一度きりの演出用。nonce が進んだら発火する
+  incident: { kind: Incident; nonce: number } | null;
+  // 「こう返せる」候補。回合が終わって待機に戻ったときだけ出す
+  choices: string[];
   subtitle: { who: "mira" | "user"; text: string; turnId: number } | null;
   photo: Photo | null;
   error: { code: string; message: string } | null;
@@ -125,8 +133,11 @@ export class TurnController {
     actionNonce: 0,
     fx: "none",
     fxNonce: 0,
-    scene: { weather: "storm", camera: "wide" },
+    scene: { weather: "storm", camera: "wide", lights: "on" },
     plot: "meet",
+    story: INITIAL_STORY,
+    incident: null,
+    choices: [],
     subtitle: null,
     photo: null,
     error: null,
@@ -151,6 +162,7 @@ export class TurnController {
   private streamDone = false;
   private turnActive = false;
   private spoken: string[] = [];
+  private pendingChoices: string[] = [];
   private lastInput: TurnInput | null = null;
   private photoSeq = 0;
   private t0 = 0;
@@ -203,7 +215,7 @@ export class TurnController {
   // 押下した瞬間に呼ぶ。発話中なら即座に止めて「倾听」へ
   beginListening() {
     this.cancel("interrupt");
-    this.set({ charState: "listening", error: null, notice: null });
+    this.set({ charState: "listening", error: null, notice: null, choices: [] });
   }
 
   cancelListening() {
@@ -259,6 +271,7 @@ export class TurnController {
     this.streamDone = false;
     this.streams.clear();
     this.spoken = [];
+    this.pendingChoices = [];
     this.lastInput = input;
     this.t0 = this.now();
 
@@ -267,6 +280,7 @@ export class TurnController {
     this.set({
       turnId,
       charState: "thinking",
+      choices: [],
       error: null,
       notice: null,
       metrics: {},
@@ -286,6 +300,7 @@ export class TurnController {
       history: isRetry && input.kind === "text" ? history.slice(0, -1) : history,
       scene: this.s.scene,
       plot: this.s.plot,
+      story: this.s.story,
       forceMock: this.forceMock,
       fail: this.fail,
     };
@@ -302,9 +317,12 @@ export class TurnController {
             this.set({ provider: ev.provider });
             break;
           case "heard":
-            this.pushHistory({ who: "user", text: ev.text });
-            this.set({ subtitle: { who: "user", text: ev.text, turnId } });
-            this.log("heard", ev.text, turnId);
+            // 聞き取れなかった回は空になる。履歴にも字幕にも残さない
+            if (ev.text.trim()) {
+              this.pushHistory({ who: "user", text: ev.text });
+              this.set({ subtitle: { who: "user", text: ev.text, turnId } });
+            }
+            this.log("heard", ev.text || "（没听清）", turnId);
             break;
           case "metric":
             this.set({ metrics: { ...this.s.metrics, [ev.name]: ev.ms } });
@@ -321,6 +339,9 @@ export class TurnController {
             if (!this.playing) void this.playLoop(epoch, playAc.signal);
             break;
           }
+          case "choices":
+            this.pendingChoices = ev.items;
+            break;
           case "audio":
             this.streams.get(ev.seq)?.push(ev.b64);
             break;
@@ -390,12 +411,16 @@ export class TurnController {
     }
     if (beat.scene) patch.scene = { ...this.s.scene, ...beat.scene };
     if (beat.plot) patch.plot = beat.plot;
+    if (beat.story) patch.story = beat.story;
+    if (beat.incident) patch.incident = { kind: beat.incident, nonce: (this.s.incident?.nonce ?? 0) + 1 };
     if (audioError) patch.notice = "语音合成失败，已降级为浏览器朗读/仅字幕";
     this.set(patch);
     this.spoken.push(beat.say);
     this.log("beat", `${beat.emotion}/${beat.action} ${beat.say}`);
     if (beat.plot) this.log("plot", beat.plot);
     if (beat.scene) this.log("scene", JSON.stringify(beat.scene));
+    if (beat.incident) this.log("incident", beat.incident);
+    if (beat.story) this.log("story", `trust=${beat.story.trust} ${beat.story.flags.join(",")}${beat.story.ending ? ` ending=${beat.story.ending}` : ""}${beat.story.fin ? " fin" : ""}`);
     if (beat.event?.type === "photo" && epoch === this.epoch) this.startPhoto(beat.event.subject, beat.event.caption);
   }
 
@@ -428,7 +453,8 @@ export class TurnController {
     this.turnActive = false;
     if (this.spoken.length) this.pushHistory({ who: "mira", text: this.spoken.join("") });
     this.spoken = [];
-    this.set({ charState: "idle", metrics: { ...this.s.metrics, client_total: this.now() - this.t0 } });
+    this.set({ charState: "idle", choices: this.pendingChoices, metrics: { ...this.s.metrics, client_total: this.now() - this.t0 } });
+    this.pendingChoices = [];
     this.log("turn_end");
   }
 }

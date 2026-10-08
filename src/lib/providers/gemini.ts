@@ -1,14 +1,28 @@
 import { GoogleGenAI, ThinkingLevel, type Part } from "@google/genai";
-import { Beat, BeatAudio, TurnRequest } from "../protocol";
+import { Beat, BeatAudio, Emotion, TurnRequest } from "../protocol";
 import { SYSTEM_PROMPT, buildUserPrompt, photoPrompt } from "../story";
 import { pcm16ToWav } from "../wav";
-import { CallCtx, ModelRow, Purpose, getModel, listByPurpose, logCall, resolveKey, statusOf, usageFromGemini } from "../aiRegistry";
+import { CallCtx, ModelRow, Purpose, getModel, listByPurpose, logCall, resolveKey, statusOf, usageFromGemini, usageFromInteraction } from "../aiRegistry";
 import { openaiTtsStream } from "./openai";
 import { NdjsonSplitter, Provider, ReplyChunk } from "./types";
 
-const VOICE = process.env.GEMINI_TTS_VOICE || "Aoede";
+const VOICE = process.env.GEMINI_TTS_VOICE || "Achernar";
 
-// gemini-3.8-flash-tts は語気指示（英文前置き・systemInstruction・演出メモ）を本文ごと読み上げるか拒否するため、台詞のみ渡す
+// gemini-3.x TTS は generateContent だと語気指示を本文ごと読み上げるため、Interactions API で
+// 語気を speech_metadata.style に分離し、text は逐語の台詞（<sigh> 等のタグ込み）として渡す。2.5 系は台詞のみ
+const usesInteractions = (modelId: string) => modelId.startsWith("gemini-3");
+
+const EMOTION_STYLE: Record<Emotion, string> = {
+  neutral: "Calm and gentle, a little tired from the late night, relaxed and unhurried.",
+  happy: "Warm, smiling while talking, brighter and a bit quicker.",
+  shy: "Shy and a little embarrassed, quieter and slower, hesitant, trailing off.",
+  sad: "Wistful and quiet, with a soft sigh, slower, letting phrase ends fade.",
+  surprised: "Genuinely caught off guard, a little breathless, pitch rising naturally.",
+};
+
+export function geminiTtsStyle(emotion: Emotion): string {
+  return `Mira, a 26-year-old woman and native Mandarin speaker, talking softly to one person across a small table in a quiet café late at night. Casual and intimate, not narrating. ${EMOTION_STYLE[emotion]}`;
+}
 
 const clients = new Map<string, GoogleGenAI>();
 // MINIMAL 非対応のモデル（例: gemini-3.7-flash）は一度失敗したら LOW で呼ぶ
@@ -54,7 +68,7 @@ export class GeminiProvider implements Provider {
   async *reply(req: TurnRequest, signal: AbortSignal): AsyncIterable<ReplyChunk> {
     const { ai, row } = clientFor(getModel("gemini", "text"));
     const ctx: CallCtx = { sessionId: req.sessionId, turnId: req.turnId };
-    const parts: Part[] = [{ text: buildUserPrompt(req.input, req.history, req.scene, req.plot) }];
+    const parts: Part[] = [{ text: buildUserPrompt(req.input, req.history, req.scene, req.plot, req.story) }];
     if (req.input.kind === "audio") {
       parts.push({ inlineData: { mimeType: req.input.mime, data: req.input.b64 } });
     }
@@ -131,6 +145,10 @@ export class GeminiProvider implements Provider {
       return;
     }
     const { ai, row } = clientFor(ttsRow);
+    if (usesInteractions(row.model_id)) {
+      yield* interactionTts(ai, row, beat, signal, ctx);
+      return;
+    }
     const t0 = Date.now();
     let usageMeta: Parameters<typeof usageFromGemini>[0];
     let status: "ok" | "error" | "aborted" | "timeout" = "ok";
@@ -175,5 +193,41 @@ export class GeminiProvider implements Provider {
     const data = res.candidates?.[0]?.content?.parts?.find((p) => p.inlineData)?.inlineData;
     if (!data?.data) throw new Error("image_empty");
     return { mime: data.mimeType || "image/png", b64: data.data };
+  }
+}
+
+async function* interactionTts(ai: GoogleGenAI, row: ModelRow, beat: Beat, signal: AbortSignal, ctx?: CallCtx): AsyncIterable<{ pcm: Buffer; rate: number }> {
+  const t0 = Date.now();
+  let usage: Parameters<typeof usageFromInteraction>[0];
+  let status: "ok" | "error" | "aborted" | "timeout" = "ok";
+  let error: string | undefined;
+  const style = geminiTtsStyle(beat.emotion);
+  try {
+    const stream = await ai.interactions.create(
+      {
+        model: row.model_id,
+        input: [{ type: "user_input", content: [{ type: "text", text: beat.speech ?? beat.say, annotations: [{ type: "speech_metadata", style }] }] }],
+        response_format: { type: "audio" },
+        generation_config: { speech_config: [{ voice: row.voice || VOICE }] },
+        stream: true,
+      },
+      { signal },
+    );
+    for await (const ev of stream) {
+      if (ev.event_type === "step.delta" && ev.delta.type === "audio" && ev.delta.data) {
+        yield { pcm: Buffer.from(ev.delta.data, "base64"), rate: ev.delta.sample_rate ?? 24000 };
+      } else if (ev.event_type === "interaction.completed") {
+        usage = ev.interaction.usage;
+      } else if (ev.event_type === "error") {
+        throw new Error(`gemini tts: ${ev.error?.message ?? "stream error"}`);
+      }
+    }
+  } catch (e) {
+    status = statusOf(e, signal);
+    error = String((e as Error)?.message ?? e);
+    throw e;
+  } finally {
+    if (signal.aborted && status === "ok") status = "aborted";
+    logCall({ row, provider: "gemini", purpose: "tts", modelId: row.model_id, ctx, status, latencyMs: Date.now() - t0, usage: usageFromInteraction(usage), error, detail: `${beat.emotion} ${beat.speech ?? beat.say}` });
   }
 }

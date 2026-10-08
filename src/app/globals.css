@@ -153,7 +153,7 @@ button:disabled { cursor: default; opacity: 0.45; }
 @keyframes pulse { 50% { transform: translateX(-50%) scale(1.08); } }
 
 /* ---------- 特效 ---------- */
-.fx-lightning { position: absolute; inset: 0; z-index: 4; pointer-events: none; background: #dfe8ff; mix-blend-mode: screen; animation: lightning 1.1s forwards; }
+.fx-lightning { position: absolute; inset: 0; z-index: 5; pointer-events: none; background: #dfe8ff; mix-blend-mode: screen; animation: lightning 1.1s forwards; }
 @keyframes lightning { 0% { opacity: 0; } 6% { opacity: .85; } 14% { opacity: .05; } 22% { opacity: .55; } 40%, 100% { opacity: 0; } }
 .fx-sparkle { position: absolute; left: 64%; top: 26%; width: 0; height: 0; pointer-events: none; }
 .fx-sparkle span {
@@ -262,7 +262,7 @@ button:disabled { cursor: default; opacity: 0.45; }
 
 /* ---------- 开场 ---------- */
 .intro {
-  position: absolute; inset: 0; z-index: 40; display: grid; place-items: center; padding: 20px;
+  position: absolute; inset: 0; z-index: 60; display: grid; place-items: center; padding: 20px;
   background: radial-gradient(ellipse at 50% 60%, rgba(10,6,6,.55), rgba(5,3,3,.92));
   backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
 }
@@ -306,14 +306,17 @@ button:disabled { cursor: default; opacity: 0.45; }
 /* ---------- 立绘角色 ---------- */
 .mira-wrap:has(.sprite) { aspect-ratio: auto; width: auto; }
 .sprite { position: relative; height: 100%; filter: drop-shadow(0 14px 30px rgba(0,0,0,.5)); }
+.sprite-sway { position: absolute; inset: 0; transform-origin: 50% 100%; will-change: transform; }
 .sprite-body { position: absolute; inset: 0; transform-origin: 50% 100%; animation: spriteBreath 4.4s ease-in-out infinite; }
-.sprite-body img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; opacity: 0; transition: opacity .28s ease; user-select: none; -webkit-user-drag: none; pointer-events: none; }
-.sprite-body img.on { opacity: 1; }
-.sprite-body img.talk { transition: opacity .06s; }
-.sprite.mouth .sprite-body img.talk.cur { opacity: 1; }
-.sprite-body img.blink { transition: none; }
+/* 切替は新しい絵を上に重ねてフェードインし、古い絵はその後で消す。
+   両方を同時に半透明にすると体が透けて背景が見えてしまう */
+.sprite-body img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; opacity: 0; z-index: 0; transition: opacity 0s linear .32s; user-select: none; -webkit-user-drag: none; pointer-events: none; }
+.sprite-body img.on { opacity: 1; z-index: 1; transition: opacity .3s ease; }
+.sprite-body img.mouth { z-index: 2; transition: none; }
+.sprite[data-mouth="half"] img.m-half.cur, .sprite[data-mouth="talk"] img.m-talk.cur, .sprite[data-mouth="o"] img.m-o.cur { opacity: 1; }
+.sprite-body img.blink { z-index: 3; transition: none; }
 .sprite.blinking .sprite-body img.blink { opacity: 1; }
-.sprite { transition: transform .6s ease; transform-origin: 50% 100%; }
+.sprite { transition: transform .6s ease, filter .8s; transform-origin: 50% 100%; }
 .sprite.state-listening { transform: translateY(-6px) scale(1.012); }
 .sprite-body.nod { animation: spriteNod 1s ease-in-out, spriteBreath 4.4s ease-in-out 1s infinite; }
 @keyframes spriteBreath { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.006, 1.012); } }
@@ -324,3 +327,40 @@ button:disabled { cursor: default; opacity: 0.45; }
 .think-dom i { width: 8px; height: 8px; border-radius: 50%; background: #8a7a86; animation: dot 1.2s infinite; }
 .think-dom i:nth-child(2) { animation-delay: .15s; } .think-dom i:nth-child(3) { animation-delay: .3s; }
 .stats-link { margin-left: auto; margin-right: 12px; color: #8fc9ff; text-decoration: none; }
+
+/* ---------- 停电・烛光 ---------- */
+.lamps { transition: opacity .25s steps(3); }
+.lights-off .lamps { opacity: 0; }
+.blackout {
+  position: absolute; inset: 0; z-index: 4; pointer-events: none; opacity: 0; transition: opacity .8s ease;
+  background: radial-gradient(ellipse 34% 40% at 50% 66%, rgba(255, 160, 70, .16), rgba(14, 8, 4, .45) 55%, rgba(4, 3, 8, .86));
+}
+.lights-off .blackout { opacity: 1; animation: candleFlicker 2.8s infinite; }
+@keyframes candleFlicker { 0%, 100% { filter: brightness(1); } 20% { filter: brightness(1.06); } 45% { filter: brightness(.95); } 70% { filter: brightness(1.04); } }
+.lights-off .sprite { filter: drop-shadow(0 14px 30px rgba(0,0,0,.5)) brightness(.78) sepia(.18); }
+.candle { position: absolute; left: 44%; top: -46px; width: 16px; height: 46px; border-radius: 3px; background: linear-gradient(90deg, #e8dccb, #fffaf0 45%, #d6c6b0); }
+.candle i { position: absolute; left: 50%; bottom: 100%; width: 12px; height: 22px; margin-left: -6px; border-radius: 50% 50% 45% 45% / 65% 65% 35% 35%; background: radial-gradient(ellipse at 50% 75%, #fff6d0, #ffc560 45%, rgba(255,120,30,.0) 75%); box-shadow: 0 0 30px 12px rgba(255, 170, 70, .35); animation: flame 1.3s infinite ease-in-out; transform-origin: 50% 100%; }
+@keyframes flame { 0%, 100% { transform: scale(1) rotate(-2deg); } 35% { transform: scale(1.06, .94) rotate(2deg); } 70% { transform: scale(.95, 1.05) rotate(-1deg); } }
+
+/* ---------- 结局 ---------- */
+.ending-card {
+  position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); z-index: 30;
+  width: min(86vw, 380px); padding: 28px 24px 22px; text-align: center; border-radius: 14px;
+  background: rgba(20, 13, 9, .9); color: #f3e6d6; box-shadow: 0 20px 60px rgba(0,0,0,.6); backdrop-filter: blur(6px);
+  animation: fadeIn 1.2s ease;
+}
+.ending-kicker { font-size: 12px; letter-spacing: .4em; opacity: .6; }
+.ending-card h2 { margin: 6px 0 12px; font-family: "Songti SC", "Noto Serif SC", serif; font-size: 30px; font-weight: 600; letter-spacing: .3em; }
+.ending-card p:not(.ending-kicker) { font-size: 14px; line-height: 1.8; opacity: .85; }
+.ending-actions { display: flex; gap: 12px; justify-content: center; margin-top: 18px; align-items: center; }
+.ending-stay { background: none; border: 0; color: inherit; opacity: .6; font: inherit; font-size: 13px; cursor: pointer; }
+
+/* ---------- 回复建议 ---------- */
+.choices { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 0 auto 10px; max-width: 640px; animation: fadeIn .4s ease; }
+.choice {
+  padding: 8px 14px; border-radius: 18px; border: 1px solid rgba(255, 210, 160, .35); cursor: pointer;
+  background: rgba(30, 20, 14, .72); color: #f6e8d6; font: inherit; font-size: 14px; line-height: 1.3;
+  backdrop-filter: blur(6px); transition: background .2s, transform .15s;
+}
+.choice:hover { background: rgba(70, 45, 28, .85); }
+.choice:active { transform: scale(.96); }

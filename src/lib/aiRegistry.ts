@@ -1,6 +1,6 @@
 import { getDb } from "./db";
 
-export type Purpose = "text" | "tts" | "image" | "sprite";
+export type Purpose = "text" | "tts" | "image" | "sprite" | "music";
 
 export interface ModelRow {
   id: number;
@@ -90,6 +90,18 @@ export function usageFromGemini(meta: GeminiUsageMeta | undefined): Usage {
     output: meta.candidatesTokenCount ?? 0,
     thought: meta.thoughtsTokenCount ?? 0,
   };
+}
+
+interface InteractionUsage {
+  total_input_tokens?: number;
+  total_output_tokens?: number;
+  total_thought_tokens?: number;
+}
+
+// Interactions API（gemini-3.x TTS）の usage
+export function usageFromInteraction(u: InteractionUsage | undefined): Usage {
+  if (!u) return { ...EMPTY_USAGE };
+  return { inputText: u.total_input_tokens ?? 0, inputAudio: 0, inputImage: 0, output: u.total_output_tokens ?? 0, thought: u.total_thought_tokens ?? 0 };
 }
 
 interface OpenAIImageUsage {

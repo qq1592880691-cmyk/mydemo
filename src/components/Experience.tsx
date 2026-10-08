@@ -3,33 +3,44 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { TurnController, type Snapshot } from "@/client/turnController";
 import { BrowserAudio, MicRecorder, fetchImage, sseTransport } from "@/client/browserDeps";
-import type { CharState, FailMode } from "@/lib/protocol";
+import { Soundscape } from "@/client/soundscape";
+import type { CharState, Ending, FailMode } from "@/lib/protocol";
 import Character from "./Character";
 import { Lamps, Table, WindowView } from "./CafeScene";
 
 const STATE_LABEL: Record<CharState, string> = { idle: "待机", listening: "倾听中", thinking: "思考中", speaking: "说话中" };
 
+const ENDING_TEXT: Record<Ending, { title: string; line: string }> = {
+  reunion: { title: "重逢", line: "门铃第二次响起的时候，雨停了。三年前的照片，终于交到了他手里。" },
+  letgo: { title: "释然", line: "雨停了，她没有再等。今晚留下的，是一张属于你的照片。" },
+  farewell: { title: "告别", line: "雨还在下。她轻声说了晚安，咖啡馆的灯一盏盏熄灭。" },
+};
+const MUTE_KEY = "mira-muted";
+const SILENCE_PEAK = 0.08;
+
 interface Runtime {
   audio: BrowserAudio;
+  sound: Soundscape;
   rec: MicRecorder;
   ctrl: TurnController;
 }
 
 function createRuntime(): Runtime {
   const audio = new BrowserAudio();
+  const sound = new Soundscape();
   const rec = new MicRecorder(() => audio.ctx);
   const ctrl: TurnController = new TurnController({
     transport: sseTransport,
     audio,
     image: (subject, signal) => fetchImage(subject, signal, { forceMock: ctrl.forceMock, fail: ctrl.fail, sessionId: ctrl.sessionId }),
   });
-  return { audio, rec, ctrl };
+  return { audio, sound, rec, ctrl };
 }
 
 export default function Experience() {
   const rt = useRef<Runtime | null>(null);
   rt.current ??= createRuntime();
-  const { audio, rec, ctrl } = rt.current;
+  const { audio, sound, rec, ctrl } = rt.current;
   const s = useSyncExternalStore(ctrl.subscribe, ctrl.getSnapshot, ctrl.getSnapshot);
 
   const [text, setText] = useState("");
@@ -37,6 +48,8 @@ export default function Experience() {
   const [debug, setDebug] = useState(false);
   const [fail, setFail] = useState<FailMode | "">("");
   const [mock, setMock] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [endSeen, setEndSeen] = useState(false);
   const pressing = useRef(false);
   const micBtn = useRef<HTMLButtonElement>(null);
 
@@ -50,6 +63,50 @@ export default function Experience() {
     ctrl.forceMock = mock;
     ctrl.fail = fail || undefined;
   }, [ctrl, mock, fail]);
+
+  // 音はユーザー操作の中でしか始められないので、操作のたびに解錠と接続を試みる
+  const unlock = useCallback(() => {
+    audio.unlock();
+    sound.attach(audio.ctx);
+  }, [audio, sound]);
+
+  useEffect(() => {
+    let m = false;
+    try {
+      m = localStorage.getItem(MUTE_KEY) === "1";
+    } catch {}
+    setMuted(m);
+  }, []);
+  useEffect(() => {
+    sound.setMuted(muted);
+  }, [sound, muted]);
+  const toggleMute = () => {
+    setMuted((m) => {
+      try {
+        localStorage.setItem(MUTE_KEY, m ? "0" : "1");
+      } catch {}
+      return !m;
+    });
+  };
+
+  // 場面の状態を音へ反映する。停電中は音楽が止まり、雨音だけが残る
+  const lightsOff = s.scene.lights === "off";
+  const track = !s.started || lightsOff ? null : (s.story.ending ?? (s.plot === "ending" ? "letgo" : s.plot));
+  useEffect(() => {
+    void sound.setTrack(track);
+  }, [sound, track]);
+  useEffect(() => {
+    sound.setWeather(s.scene.weather);
+  }, [sound, s.scene.weather]);
+  useEffect(() => {
+    sound.setDuck(s.charState === "speaking");
+  }, [sound, s.charState]);
+  useEffect(() => {
+    if (s.fx === "lightning" && s.fxNonce) sound.thunder();
+  }, [sound, s.fx, s.fxNonce]);
+  useEffect(() => {
+    if (s.incident?.kind === "doorbell" || s.incident?.kind === "arrival") sound.doorbell();
+  }, [sound, s.incident]);
 
   useEffect(() => {
     if (!hint) return;
@@ -69,11 +126,12 @@ export default function Experience() {
   }, [rec]);
 
   const getLevel = useCallback(() => audio.level(), [audio]);
+  const getTone = useCallback(() => audio.tone(), [audio]);
 
   const pressStart = useCallback(async () => {
     if (pressing.current) return;
     pressing.current = true;
-    audio.unlock();
+    unlock();
     ctrl.beginListening();
     try {
       await rec.start();
@@ -88,7 +146,7 @@ export default function Experience() {
       rec.stop();
       ctrl.cancelListening();
     }
-  }, [audio, ctrl, rec]);
+  }, [unlock, ctrl, rec]);
 
   const pressEnd = useCallback(() => {
     if (!pressing.current) return;
@@ -97,6 +155,12 @@ export default function Experience() {
     if (!r || r.ms < 400) {
       ctrl.cancelListening();
       setHint("按住说话，松开发送");
+      return;
+    }
+    // ほぼ無音の録音を送ると、モデルが聞こえていない発話を「転写」してしまう（誤タップ・押し損ね）
+    if (r.peak < SILENCE_PEAK) {
+      ctrl.cancelListening();
+      setHint("没听清，再说一次？");
       return;
     }
     void ctrl.sendAudio(r.b64, r.mime);
@@ -124,25 +188,25 @@ export default function Experience() {
   const submitText = (e: React.FormEvent) => {
     e.preventDefault();
     if (!text.trim()) return;
-    audio.unlock();
+    unlock();
     void ctrl.sendText(text);
     setText("");
   };
 
   const enter = () => {
-    audio.unlock();
+    unlock();
     void ctrl.start();
   };
 
   return (
-    <main className={`stage cam-${s.scene.camera} weather-${s.scene.weather} cs-${s.charState}`}>
+    <main className={`stage cam-${s.scene.camera} weather-${s.scene.weather} cs-${s.charState} ${lightsOff ? "lights-off" : ""}`}>
       <div className="camera">
         <div className="wall" />
         <WindowView weather={s.scene.weather} />
         <Lamps />
         <div className="mira-wrap">
           <div className="listen-ring" />
-          <Character emotion={s.emotion} action={s.action} actionNonce={s.actionNonce} charState={s.charState} getLevel={getLevel} />
+          <Character emotion={s.emotion} action={s.action} actionNonce={s.actionNonce} charState={s.charState} getLevel={getLevel} getTone={getTone} />
           {s.fx === "sparkle" && (
             <div key={s.fxNonce} className="fx-sparkle" aria-hidden>
               {Array.from({ length: 9 }, (_, i) => (
@@ -151,8 +215,9 @@ export default function Experience() {
             </div>
           )}
         </div>
-        <Table />
+        <Table candle={lightsOff} />
       </div>
+      <div className="blackout" aria-hidden />
       {s.fx === "lightning" && <div key={s.fxNonce} className="fx-lightning" aria-hidden />}
       <div className="vignette" />
 
@@ -163,6 +228,9 @@ export default function Experience() {
         </div>
         <div className="hud-right">
           {s.provider && <span className={`badge badge-${s.provider}`}>{s.provider.toUpperCase()}</span>}
+          <button className="icon-btn" onClick={toggleMute} aria-label={muted ? "打开声音" : "静音"} aria-pressed={muted}>
+            {muted ? "🔇" : "🔊"}
+          </button>
           <button className="icon-btn" onClick={() => setDebug((d) => !d)} aria-label="调试面板">
             ⚙
           </button>
@@ -192,6 +260,23 @@ export default function Experience() {
             </p>
           )}
         </div>
+        {s.choices.length > 0 && s.charState === "idle" && (
+          <div className="choices" role="group" aria-label="回复建议">
+            {s.choices.map((c) => (
+              <button
+                key={c}
+                type="button"
+                className="choice"
+                onClick={() => {
+                  unlock();
+                  void ctrl.sendText(c);
+                }}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+        )}
         <form className="controls" onSubmit={submitText}>
           <input
             value={text}
@@ -226,6 +311,22 @@ export default function Experience() {
         </form>
         <p className="mic-tip">{s.charState === "speaking" ? "按住麦克风即可打断她" : s.charState === "listening" ? "松开发送" : "按住麦克风说话（桌面可长按空格）"}</p>
       </section>
+
+      {s.story.fin && s.story.ending && s.charState === "idle" && !endSeen && (
+        <div className="ending-card" role="dialog" aria-label="结局">
+          <p className="ending-kicker">结局</p>
+          <h2>{ENDING_TEXT[s.story.ending].title}</h2>
+          <p>{ENDING_TEXT[s.story.ending].line}</p>
+          <div className="ending-actions">
+            <button className="enter" onClick={() => location.reload()}>
+              再来一次
+            </button>
+            <button className="ending-stay" onClick={() => setEndSeen(true)}>
+              再待一会儿
+            </button>
+          </div>
+        </div>
+      )}
 
       {debug && <DebugPanel snap={s} audio={audio} fail={fail} setFail={setFail} mock={mock} setMock={setMock} onClose={() => setDebug(false)} />}
 
@@ -336,6 +437,13 @@ function DebugPanel({
         <dd>#{snap.turnId}</dd>
         <dt>剧情</dt>
         <dd>{snap.plot}</dd>
+        <dt>信任</dt>
+        <dd>
+          {snap.story.trust}/10{snap.story.ending ? ` → ${snap.story.ending}` : ""}
+          {snap.story.fin ? " (fin)" : ""}
+        </dd>
+        <dt>事件</dt>
+        <dd>{snap.story.flags.join(", ") || "—"}</dd>
         <dt>语音输出</dt>
         <dd>{audio.mode}</dd>
         {Object.entries(snap.metrics).map(([k, v]) => (

@@ -1,7 +1,8 @@
 import { getProvider } from "@/lib/providers";
 import { withTimeout } from "@/lib/providers/types";
-import { Beat, BeatAudio, StreamEvent, TurnRequest, normalizeBeat } from "@/lib/protocol";
+import { Beat, BeatAudio, INITIAL_STORY, StreamEvent, StutterLimiter, TurnRequest, normalizeBeat, normalizeChoices } from "@/lib/protocol";
 import { applyPlotHooks } from "@/lib/story";
+import { StoryTurn, userTurnOf } from "@/lib/storyState";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,7 +10,7 @@ export const maxDuration = 60;
 
 const CHUNK_TIMEOUT = 15_000;
 const TTS_TIMEOUT = 12_000;
-const TTS_CONCURRENCY = 2;
+const TTS_CONCURRENCY = 4;
 
 // 1 ビート分の音声。流式なら PCM 断片が溜まっていき、非流式なら whole に丸ごと入る
 class Voice {
@@ -110,8 +111,14 @@ export async function POST(req: Request) {
       };
 
       let plot = body.plot;
+      const story = new StoryTurn(body.story ?? INITIAL_STORY, userTurnOf(body.history, body.input.kind));
       let seq = 0;
       let chain = Promise.resolve();
+      let emitted = 0;
+      const play = (beat: Beat, voice: Voice) => {
+        chain = chain.then(() => emit(beat, voice, emitted++ === 0));
+      };
+      const stutter = new StutterLimiter();
       try {
         const it = provider.reply(body, ac.signal)[Symbol.asyncIterator]();
         while (true) {
@@ -123,16 +130,24 @@ export async function POST(req: Request) {
             send({ type: "metric", turnId, name: "heard", ms: Date.now() - t0 });
             continue;
           }
-          const norm = normalizeBeat(obj, seq);
+          if ("choices" in obj) {
+            const items = normalizeChoices(obj.choices);
+            // 台詞を全部流した後に届くよう、再生チェーンの最後に積む
+            if (items.length) chain = chain.then(() => send({ type: "choices", turnId, items }));
+            continue;
+          }
+          // 字幕と合成用テキストが食い違わないよう、正規化前の台詞に掛ける
+          const raw = obj as Record<string, unknown>;
+          if (typeof raw.say === "string") raw.say = stutter.apply(raw.say);
+          const norm = normalizeBeat(raw, seq);
           if (!norm) continue;
-          const beat = applyPlotHooks(norm, plot);
+          const beat = story.apply(applyPlotHooks(story.gate(norm, plot), plot), plot);
           if (beat.plot) plot = beat.plot;
           if (seq === 0) send({ type: "metric", turnId, name: "first_line", ms: Date.now() - t0 });
           const voice = new Voice();
           void synth(beat, voice);
-          const isFirst = seq === 0;
           seq++;
-          chain = chain.then(() => emit(beat, voice, isFirst));
+          play(beat, voice);
         }
         await chain;
         send({ type: "metric", turnId, name: "total", ms: Date.now() - t0 });

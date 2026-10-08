@@ -1,4 +1,5 @@
-import { Beat, HistoryItem, PlotStage, TurnRequest } from "../protocol";
+import { Beat, INITIAL_STORY, PlotStage, StoryState, TurnRequest } from "../protocol";
+import { pickEnding } from "../storyState";
 import { CallCtx, EMPTY_USAGE, Purpose, getModel, logCall, statusOf } from "../aiRegistry";
 import { Provider, ReplyChunk, sleep } from "./types";
 
@@ -44,13 +45,29 @@ const SCRIPT = {
       event: { type: "photo", subject: "a rain-soaked night street in Lisbon with a yellow tram and neon reflections", caption: "里斯本的雨夜" },
     },
   ],
-  reveal: [
-    { say: "……被你发现了。", emotion: "shy", action: "touch_hairpin", plot: "reveal" },
-    { say: "三年前也是这样的雨夜，我在这里给一个陌生人拍了张照片。", emotion: "neutral", action: "look_window" },
-    { say: "我们约好今天，我把洗好的照片交给他。", emotion: "sad", action: "none" },
-    { say: "不过，他大概不会来了吧。", emotion: "sad", action: "sip" },
+  blackout: [
+    { say: "诶——", emotion: "surprised", action: "look_window", incident: "blackout" },
+    { say: "停电了……别怕，我包里有蜡烛。", emotion: "neutral", action: "hold_candle" },
+    { say: "这样也挺好的，像在露营。", emotion: "happy", action: "chin_rest" },
   ],
-  ending: [
+  reveal: [
+    { say: "……被你发现了。", emotion: "shy", action: "touch_hairpin", plot: "reveal", incident: "lights_on" },
+    { say: "三年前也是这样的雨夜，我在这里给一个陌生人拍了张照片。", emotion: "neutral", action: "look_window" },
+    { say: "就是这张。", emotion: "shy", action: "give_photo", incident: "old_photo" },
+    { say: "我们约好今天，我把洗好的照片交给他。", emotion: "sad", action: "none" },
+  ],
+  doorbell: [
+    { say: "……！", emotion: "surprised", action: "look_door", incident: "doorbell" },
+    { say: "……是风啊。", emotion: "sad", action: "none" },
+    { say: "你说，我还要再等下去吗？", emotion: "shy", action: "chin_rest" },
+  ],
+  reunion: [
+    { say: "嗯……那我再等一会儿。谢谢你。", emotion: "happy", action: "nod", plot: "ending" },
+    { say: "……门铃？", emotion: "surprised", action: "look_door", incident: "arrival" },
+    { say: "是他……真的是他。", emotion: "happy", action: "wipe_tears", fx: "sparkle" },
+    { say: "谢谢你今晚陪我等。再见啦。", emotion: "happy", action: "wave", fin: true },
+  ],
+  letgo: [
     { say: "真的……雨停了。", emotion: "surprised", action: "look_window", plot: "ending" },
     { say: "也许我等的不是他，是一个能好好告别的晚上。", emotion: "happy", action: "touch_hairpin", fx: "sparkle" },
     {
@@ -58,25 +75,56 @@ const SCRIPT = {
       emotion: "happy",
       action: "raise_camera",
       event: { type: "photo", subject: "a cozy cafe window table right after rain, two coffee cups, wet street lights glowing outside", caption: "雨停的时候" },
+      fin: true,
     },
   ],
   farewell: [
+    { say: "……嗯。时间不早了，店要打烊了。", emotion: "sad", action: "look_window", plot: "ending" },
+    { say: "没什么，只是雨太大了。", emotion: "sad", action: "wipe_tears" },
+    { say: "路上小心。晚安。", emotion: "neutral", action: "wave", fin: true },
+  ],
+  after: [
     { say: "该说谢谢的是我。", emotion: "happy", action: "nod" },
     { say: "下次下雨的时候，也许还会在这里遇见你。", emotion: "shy", action: "touch_hairpin", fx: "sparkle" },
   ],
   idle: [
-    { say: "嗯……我在听。", emotion: "neutral", action: "nod" },
+    { say: "嗯……我在听。", emotion: "neutral", action: "chin_rest" },
     { say: "这家店的拿铁很好喝，可惜快打烊了。", emotion: "neutral", action: "sip" },
   ],
 } satisfies Record<string, Raw[]>;
 
-function pickScript(text: string, plot: PlotStage, history: HistoryItem[]): Raw[] {
-  if (plot === "ending") return SCRIPT.farewell;
-  if (/雨停|停了|晴|月亮/.test(text) || (plot === "reveal" && history.length > 8)) return SCRIPT.ending;
+// 台本ごとの返答候補。最後の 1 つが次の段へ進む言い回し（実モデルの prompt と同じ並び）
+const CHOICES = new Map<Raw[], string[]>([
+  [SCRIPT.start, ["你好，雨好大", "这里还营业吗？", "你是在等人吗？"]],
+  [SCRIPT.greet, ["你是摄影师吗？", "这里的咖啡好喝吗？", "你在等谁呀？"]],
+  [SCRIPT.photo, ["拍得真好看", "下次带我去拍照吧", "你在等谁呀？"]],
+  [SCRIPT.blackout, ["别怕，我在呢", "烛光也挺好的", "你在等谁呀？"]],
+  [SCRIPT.idle, ["你拍的照片真好看", "谢谢你陪我聊天", "你在等谁呀？"]],
+  [SCRIPT.reveal, ["那张照片拍得真好", "他是个什么样的人？", "你还会继续等吗？"]],
+  [SCRIPT.doorbell, ["算了，关我什么事", "也许该放下了", "我陪你一起等吧"]],
+  [SCRIPT.reunion, ["祝你们好好的", "谢谢你今晚的故事"]],
+  [SCRIPT.letgo, ["这张照片我会留着", "下次下雨再见"]],
+  [SCRIPT.farewell, ["晚安，路上小心", "对不起，打扰了"]],
+  [SCRIPT.after, ["晚安", "再见啦"]],
+]);
+
+const KIND = /谢谢|喜欢|好看|陪你|加油|理解|抱歉|没关系|真好|厉害|温柔|一起/;
+const RUDE = /无聊|关我什么事|烦|滚|随便|快点|没意思|算了吧/;
+
+function pickScript(text: string, plot: PlotStage, story: StoryState, userTurns: number): Raw[] {
+  const has = (f: string) => story.flags.some((x) => x === f);
+  if (story.fin) return SCRIPT.after;
+  if (plot === "ending") return SCRIPT[story.ending ?? "letgo"];
+  if (plot === "reveal") {
+    if (!has("old_photo")) return SCRIPT.reveal;
+    if (!has("doorbell")) return SCRIPT.doorbell;
+    return SCRIPT[pickEnding(story)];
+  }
   if (/等|谁|为什么|一个人|约/.test(text)) return SCRIPT.reveal;
   if (/照片|拍|相机|摄影/.test(text)) return SCRIPT.photo;
-  if (/你好|嗨|hi|hello|雨/i.test(text)) return SCRIPT.greet;
-  if (plot === "reveal") return SCRIPT.ending;
+  if (plot === "chat" && !has("blackout") && userTurns >= 3) return SCRIPT.blackout;
+  if (plot === "chat" && userTurns >= 5) return SCRIPT.reveal;
+  if (/你好|嗨|hi|hello|雨/i.test(text) || plot === "meet") return SCRIPT.greet;
   return SCRIPT.idle;
 }
 
@@ -110,13 +158,21 @@ export class MockProvider implements Provider {
     } else if (req.input.kind === "text") {
       text = req.input.text;
     }
-    const lines = req.input.kind === "start" ? SCRIPT.start : pickScript(text, req.plot, req.history);
+    const story = req.story ?? INITIAL_STORY;
+    const userTurns = req.history.filter((h) => h.who === "user").length + (req.input.kind === "start" ? 0 : 1);
+    const script: Raw[] = req.input.kind === "start" ? SCRIPT.start : pickScript(text, req.plot, story, userTurns);
+    const lines = structuredClone(script);
+    // 友好的／冷淡な言葉で信頼度を動かし、結末の分岐を Mock でも試せるようにする
+    const trust = KIND.test(text) ? 1 : RUDE.test(text) ? -2 : 0;
+    if (trust && lines[0]) lines[0] = { ...lines[0], trust };
     await sleep(700, signal);
     for (let i = 0; i < lines.length; i++) {
       if (req.fail === "drop" && i === 1) throw new Error("stream_dropped");
       yield structuredClone(lines[i]);
       await sleep(250, signal);
     }
+    const choices = CHOICES.get(script);
+    if (choices) yield { choices };
   }
 
   async tts(_beat: Beat, signal: AbortSignal, ctx?: CallCtx) {

@@ -60,9 +60,27 @@ const VARIANTS: Record<string, [string, string]> = {
   talk_shy: ["shy", "her mouth is slightly open mid-speech, as if softly saying 'ah'. The rest of the expression stays identical."],
   talk_sad: ["sad", "her mouth is slightly open mid-speech, as if quietly saying 'ah'. The rest of the expression stays identical."],
   talk_surprised: ["surprised", "her mouth is open wider mid-speech, as if exclaiming 'ah!'. The rest of the expression stays identical."],
+  // 口パク用の中間口形。半開き（子音・音節のつなぎ）と、すぼめた「o/u」
+  half_neutral: ["neutral", "her lips are slightly parted mid-speech, a small natural gap between the lips with the upper teeth barely visible, as if between syllables. The rest of the expression stays identical."],
+  half_happy: ["happy", "her lips are slightly parted mid-speech in her smile, a small natural gap with the upper teeth barely visible, as if between syllables. The rest of the expression stays identical."],
+  half_shy: ["shy", "her lips are barely parted mid-speech, a very small gap, as if softly murmuring. The rest of the expression stays identical."],
+  half_sad: ["sad", "her lips are barely parted mid-speech, a very small gap, as if quietly murmuring. The rest of the expression stays identical."],
+  half_surprised: ["surprised", "her lips are slightly parted mid-speech, a small gap, as if between syllables. The rest of the expression stays identical."],
+  o_neutral: ["neutral", "her lips are rounded and pushed slightly forward into a small 'o' shape mid-speech, as if saying 'oh' or 'woo'. The rest of the expression stays identical."],
+  o_happy: ["happy", "her lips are rounded into a small 'o' shape mid-speech, as if saying 'oh', still with a happy look. The rest of the expression stays identical."],
+  o_shy: ["shy", "her lips are softly rounded into a small 'o' shape mid-speech, as if quietly saying 'oh'. The rest of the expression stays identical."],
+  o_sad: ["sad", "her lips are softly rounded into a small 'o' shape mid-speech, as if quietly saying 'oh'. The rest of the expression stays identical."],
+  o_surprised: ["surprised", "her lips are rounded into an 'o' shape mid-speech, as if saying 'oh!'. The rest of the expression stays identical."],
   act_sip: ["neutral", "she raises a white ceramic coffee cup with both hands to just below her lips, about to take a sip, eyes half closed and relaxed. The hands and cup are now visible."],
   act_camera: ["neutral", "she holds a vintage silver-and-black film camera up in front of her face with both hands, looking through the viewfinder, the lens pointing at the viewer. The hands and camera are now visible. Do NOT zoom in or recrop: her head and shoulders must stay at exactly the same position and size as in the original image, and she stays seated in the same spot."],
   act_hairpin: ["neutral", "she raises her right hand to gently touch the silver star hairpin, with a shy faint smile and eyes looking aside. The hand is now visible."],
+  act_chin: ["neutral", "she rests her chin on her right hand with her elbow on an unseen table, head tilted slightly, a relaxed attentive look as if listening to a friend. The hand and forearm are now visible."],
+  act_laugh: ["happy", "she laughs softly, covering her mouth with the fingertips of her right hand, eyes curved shut with joy. The hand is now visible."],
+  act_photo: ["neutral", "she holds out a small printed photograph toward the viewer with both hands at chest height, the back of the photo facing her, a gentle hesitant look. The hands and photo are now visible."],
+  act_door: ["surprised", "she turns her head sharply to her right toward an unseen door, eyes wide with sudden hope, lips slightly parted. Body pose unchanged."],
+  act_candle: ["neutral", "the room is dark: she holds a small lit white candle in both hands at chest height, warm candlelight from below illuminating her face and hands, the rest of her in soft shadow. The hands and candle are now visible."],
+  act_tears: ["sad", "she gently wipes a tear from the corner of her eye with the knuckle of her right index finger, eyes lowered, a sad faint smile. The hand is now visible."],
+  act_wave: ["happy", "she raises her right hand beside her face and waves goodbye with a warm smile. The hand is now visible."],
   act_window: ["neutral", "she turns her head toward her left to look out of an unseen window, a wistful three-quarter profile, eyes looking into the distance. Body pose unchanged."],
 };
 
@@ -131,11 +149,13 @@ const FACE_OF: Record<string, string> = {
   sad: "neutral",
   surprised: "neutral",
   blink: "neutral",
-  talk_neutral: "neutral",
-  talk_happy: "happy",
-  talk_shy: "shy",
-  talk_sad: "sad",
-  talk_surprised: "surprised",
+};
+
+// 口形差分は口の周りだけを親の表情へ合成する。顔全体を貼ると、口を開くたびに目や眉まで微妙に揺れて人形っぽくなる
+const MOUTH_PREFIX = ["talk_", "half_", "o_"];
+const mouthParent = (n: string) => {
+  const p = MOUTH_PREFIX.find((x) => n.startsWith(x));
+  return p ? n.slice(p.length) : undefined;
 };
 
 type Raw = { data: Buffer; width: number; height: number };
@@ -213,6 +233,38 @@ async function faceMask(base: Raw): Promise<Buffer> {
   return blurMask(hard, width, height, Math.max(6, rx * 0.1));
 }
 
+// 基準図と talk_neutral の差分のうち顔の下半分にある強い変化の中心を口とみなし、楕円マスクを作る
+async function mouthMask(base: Raw, talk: Raw): Promise<Buffer> {
+  const { width, height } = base;
+  const f = findFace(base);
+  const fw = f.x1 - f.x0;
+  const fh = f.y1 - f.y0;
+  const top = f.y0 + fh * 0.45;
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (let y = Math.floor(top); y < Math.min(height, f.y1 + fh * 0.3); y++)
+    for (let x = f.x0; x < f.x1; x++) {
+      const i = (y * width + x) * 3;
+      let d = 0;
+      for (let c = 0; c < 3; c++) d = Math.max(d, Math.abs(base.data[i + c] - talk.data[i + c]));
+      if (d > 60) {
+        xs.push(x);
+        ys.push(y);
+      }
+    }
+  if (xs.length < 50) throw new Error("mouth_not_found");
+  const med = (a: number[]) => a.sort((p, q) => p - q)[Math.floor(a.length / 2)];
+  const cx = med(xs);
+  const cy = med(ys);
+  const rx = fw * 0.26;
+  const ry = fh * 0.17;
+  console.log(`  嘴部区域: 中心(${cx},${cy}) 半径(${Math.round(rx)},${Math.round(ry)})`);
+  const hard = Buffer.alloc(width * height);
+  for (let y = 0; y < height; y++)
+    for (let x = 0; x < width; x++) if (((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1) hard[y * width + x] = 255;
+  return blurMask(hard, width, height, Math.max(4, rx * 0.12));
+}
+
 function composite(variant: Raw, base: Raw, mask: Buffer): Raw {
   const out = Buffer.from(base.data);
   for (let p = 0, i = 0; p < mask.length; p++, i += 3) {
@@ -274,12 +326,14 @@ async function main() {
   const raws = new Map<string, Raw>();
   for (const n of names) raws.set(n, n === "neutral" ? base : await loadRaw(fs.readFileSync(rawPath(n)), base.width, base.height));
   const mask = await faceMask(base);
+  const mMask = raws.has("talk_neutral") ? await mouthMask(base, raws.get("talk_neutral")!) : mask;
   const done = new Map<string, Raw>([["neutral", base]]);
-  // FACE_OF の依存順（表情 → その表情の口パク）に処理する
+  // 依存順（表情 → その表情の口形）に処理する
   for (const n of names) {
     if (done.has(n)) continue;
-    const parent = FACE_OF[n];
-    done.set(n, parent && done.has(parent) ? composite(raws.get(n)!, done.get(parent)!, mask) : raws.get(n)!);
+    const mp = mouthParent(n);
+    const parent = mp ?? FACE_OF[n];
+    done.set(n, parent && done.has(parent) ? composite(raws.get(n)!, done.get(parent)!, mp ? mMask : mask) : raws.get(n)!);
   }
   for (const n of names) {
     const r = done.get(n)!;

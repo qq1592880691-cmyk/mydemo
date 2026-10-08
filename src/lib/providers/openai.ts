@@ -65,19 +65,30 @@ function send(key: string, params: Record<string, string>, image: Buffer | undef
   return fetch(`${BASE}/images/edits`, { method: "POST", headers: { Authorization: `Bearer ${key}` }, body: form, signal: sig });
 }
 
-const EMOTION_TONE: Record<Emotion, string> = {
-  neutral: "平静、温柔，带一点深夜的疲惫",
-  happy: "温柔地带着笑意，语调轻快明亮",
-  shy: "害羞、轻声，有点不好意思，语速稍慢",
-  sad: "轻声地、带着叹息和失落，语速放慢",
-  surprised: "带着轻微的惊讶，语调自然上扬",
+// gpt-4o-mini-tts は英語の項目別指示（Voice/Tone/Pacing…）に最もよく従う。台詞は中文のまま
+const EMOTION_DELIVERY: Record<Emotion, string> = {
+  neutral: "Calm and gentle, a little tired from the late night. Relaxed and unhurried, like thinking out loud.",
+  happy: "Warm, you can hear the smile in her voice. Brighter and a touch quicker, with a light lift at the ends of phrases.",
+  shy: "Soft and a little embarrassed. Quieter and slower, a slight hesitation before the key words, trailing off at the end.",
+  sad: "Quiet and wistful, with a soft sigh. Slower and lower in energy, letting the ends of phrases fade away.",
+  surprised: "Genuinely caught off guard. A small quick breath, pitch rises naturally, then settles back down.",
 };
+
+export function openaiTtsInstructions(emotion: Emotion): string {
+  return [
+    "Voice: Mira, a 26-year-old woman and native Mandarin speaker from mainland China. Soft, warm and intimate, talking to one person across a small table in a quiet café late at night.",
+    "Language: Standard Mandarin with natural native tones and rhythm. This is casual spoken conversation, not a newsreader, audiobook or voice assistant.",
+    `Emotion: ${EMOTION_DELIVERY[emotion]}`,
+    "Delivery: Vary pitch and pace inside the sentence and stress the words that matter. Modal particles (嗯、啊、呢、吧、诶) are light and natural, never over-pronounced.",
+    "Pauses: Treat \"……\" as a real breath or hesitation and \"，\" as a brief natural pause, never a mechanical gap.",
+  ].join("\n");
+}
 
 // 語気は instructions で渡すので本文に混ざらず、句ごとの感情をそのまま声に反映できる
 export async function* openaiTtsStream(row: ModelRow, beat: Beat, signal: AbortSignal, ctx?: CallCtx): AsyncIterable<{ pcm: Buffer; rate: number }> {
   const key = resolveKey(row);
   if (!key) throw new Error("model_not_configured");
-  const instructions = `用标准普通话。你是 26 岁的女摄影师 Mira，声音温柔、细腻、富有感情，像在深夜安静的咖啡馆里和人聊天。句中的省略号要有真实的停顿和气息。此刻的情绪：${EMOTION_TONE[beat.emotion]}。`;
+  const instructions = openaiTtsInstructions(beat.emotion);
   const t0 = Date.now();
   let bytes = 0;
   let status: "ok" | "error" | "aborted" | "timeout" = "ok";

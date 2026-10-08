@@ -53,6 +53,7 @@ export class BrowserAudio implements AudioOut {
   private source: AudioBufferSourceNode | null = null;
   private live = 0;
   private data = new Uint8Array(256);
+  private freq = new Uint8Array(256);
   private fakeLevel = 0;
   private fakeTimer: ReturnType<typeof setInterval> | null = null;
   private stopCurrent: (() => void) | null = null;
@@ -64,6 +65,8 @@ export class BrowserAudio implements AudioOut {
       this.ctx = new AC();
       this.analyser = this.ctx.createAnalyser();
       this.analyser.fftSize = 512;
+      // 周波数側の既定平滑化（0.8）だと音節ごとの a/o の変化が均されて口形に出ない
+      this.analyser.smoothingTimeConstant = 0.4;
       this.analyser.connect(this.ctx.destination);
     }
     if (this.ctx.state === "suspended") void this.ctx.resume();
@@ -79,6 +82,20 @@ export class BrowserAudio implements AudioOut {
       return Math.min(1, Math.sqrt(sum / this.data.length) * 4);
     }
     return this.fakeLevel;
+  }
+
+  // 口形の o/a 判定用。再生中の音声のスペクトル重心（Hz）、無音・非再生時は 0
+  tone(): number {
+    if (!(this.source || this.live) || !this.analyser || !this.ctx) return 0;
+    this.analyser.getByteFrequencyData(this.freq);
+    const hz = this.ctx.sampleRate / this.analyser.fftSize;
+    let num = 0;
+    let den = 0;
+    for (let i = Math.ceil(100 / hz); i < Math.min(this.freq.length, 4000 / hz); i++) {
+      num += this.freq[i] * i * hz;
+      den += this.freq[i];
+    }
+    return den > 0 ? num / den : 0;
   }
 
   stop() {
@@ -266,6 +283,7 @@ export class MicRecorder {
   private chunks: Float32Array[] = [];
   private startedAt = 0;
   private lvl = 0;
+  private peak = 0;
 
   constructor(private getCtx: () => AudioContext | null) {}
 
@@ -282,6 +300,7 @@ export class MicRecorder {
       });
     }
     this.chunks = [];
+    this.peak = 0;
     this.src = ctx.createMediaStreamSource(this.stream);
     this.node = ctx.createScriptProcessor(4096, 1, 1);
     this.node.onaudioprocess = (e) => {
@@ -290,6 +309,7 @@ export class MicRecorder {
       let s = 0;
       for (let i = 0; i < d.length; i += 4) s += d[i] * d[i];
       this.lvl = Math.min(1, Math.sqrt(s / (d.length / 4)) * 6);
+      this.peak = Math.max(this.peak, this.lvl);
     };
     this.src.connect(this.node);
     // ScriptProcessor は出力先に繋がないと動かないブラウザがあるので無音で接続
@@ -299,7 +319,8 @@ export class MicRecorder {
     this.startedAt = performance.now();
   }
 
-  stop(): { b64: string; mime: string; ms: number } | null {
+  // peak: 録音中の最大音量（0..1）。ほぼ無音なら送らない判断に使う
+  stop(): { b64: string; mime: string; ms: number; peak: number } | null {
     const ctx = this.getCtx();
     this.node?.disconnect();
     this.src?.disconnect();
@@ -310,7 +331,7 @@ export class MicRecorder {
     if (!ctx || !this.chunks.length) return null;
     const wav = encodeWav(this.chunks, ctx.sampleRate, 16000);
     this.chunks = [];
-    return { b64: bytesToB64(wav), mime: "audio/wav", ms };
+    return { b64: bytesToB64(wav), mime: "audio/wav", ms, peak: this.peak };
   }
 }
 
