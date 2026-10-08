@@ -45,3 +45,5 @@ next-env.d.ts
 /assets-src
 /data
 /tts-samples
+/e2e/shots
+__pycache__
