@@ -226,7 +226,7 @@ state = listening
 
 ## 投入时间
 
-5–6 个小时。开发用 Claude Code，测试用 Codex。
+3–4 个小时。开发用 Claude Code，测试用 Codex。
 
 ## 如果再开发两周
 
