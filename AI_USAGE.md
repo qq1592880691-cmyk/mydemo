@@ -2,7 +2,8 @@
 
 ## 使用的 AI 工具
 
-- **Claude Code**：方案设计、代码实现、单元测试与端到端测试、问题定位、文档初稿
+- **Claude Code**：方案设计、代码实现、问题定位、文档初稿
+- **Codex**：单元测试与端到端测试的编写与执行
 - **Gemini**：运行时的对话（含语音转写）、TTS、生图；配乐生成（Lyria 3.5，`scripts/gen-bgm.ts`）
 - **OpenAI**：角色立绘生成（gpt-image，`scripts/gen-sprites.ts`）；TTS 备选；端到端测试用的语音样本
 
