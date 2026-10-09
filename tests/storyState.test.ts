@@ -264,6 +264,23 @@ describe("事件要和台词对得上", () => {
     expect(t.due("chat")).toBeNull();
   });
 
+  it("否定或假设的提及不算事件发生（嘴上说没停电就不能灭灯）", () => {
+    const t = new StoryTurn({ trust: 5, flags: [] }, 5);
+    // 模型把 blackout 标在否定句上：标记无效、旗子不立
+    expect(t.apply(beat({ say: "还好，刚才闪电了，没停电。", incident: "blackout" }), "chat").incident).toBeUndefined();
+    expect(t.state.flags).toEqual([]);
+    // 自动认领同样不吃否定/假设句
+    expect(t.apply(beat({ say: "要是停电了可怎么办。" }), "chat").incident).toBeUndefined();
+    // 之后真停电的句子才接过事件
+    expect(t.apply(beat({ say: "呀，这下真停电了！" }), "chat").incident).toBe("blackout");
+  });
+
+  it("上一轮刚发生过事件，这一轮不保底补下一个（留给反应）", () => {
+    const st = { trust: 5, flags: ["blackout"] as Incident[], recent: "blackout" as Incident, lastStep: 4 };
+    expect(new StoryTurn(st, 5).due("chat")).toBeNull();
+    expect(new StoryTurn(st, 6).due("chat")).toBe("moon");
+  });
+
   it("没到期、也没被标记过的事件，不会光凭台词就触发", () => {
     const t = new StoryTurn({ trust: 5, flags: [] }, 2);
     expect(t.apply(beat({ say: "要是停电了可怎么办呀。" }), "chat").incident).toBeUndefined();

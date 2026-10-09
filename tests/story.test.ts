@@ -55,3 +55,19 @@ describe("提示词：选项不被 Mira 说出口", () => {
     expect(SYSTEM_PROMPT).toContain("和眼前的用户无关");
   });
 });
+
+describe("提示词：人设与节奏", () => {
+  it("系统提示明确 Mira 是客人不是店员，不说欢迎光临，不替用户编话", () => {
+    expect(SYSTEM_PROMPT).toContain("不是店员");
+    expect(SYSTEM_PROMPT).toContain("欢迎光临");
+    expect(SYSTEM_PROMPT).toContain("不要替他虚构");
+  });
+
+  it("上一轮刚发生过事件时，这一轮的提示不再写「本轮必须发生」", () => {
+    const story = { trust: 5, flags: ["blackout"], recent: "blackout", lastStep: 4 } as const;
+    const history: HistoryItem[] = Array.from({ length: 4 }, (_, i) => ({ who: "user" as const, text: `第${i}句` }));
+    const last = buildTurnPrompt({ kind: "text", text: "哇，吓我一跳" }, history, scene, "chat", { ...story, flags: [...story.flags] }).at(-1)!.text;
+    expect(last).toContain("上一轮最后刚发生");
+    expect(last).not.toContain("本轮必须发生");
+  });
+});

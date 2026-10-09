@@ -33,6 +33,20 @@ export function userTurnOf(history: { who: string }[], inputKind: string): numbe
 
 const OUTER = new Set<Incident>(["blackout", "moon", "phone", "doorbell", "closing"]);
 
+// 「没停电」「要是停电」のような否定・仮定の言及は、出来事が起きたとは見なさない
+const NEGATION_BEFORE = /(没有?|不会?|不是|别|怕|要是|如果|万一|差点)[^，。！？!?]{0,3}$/;
+
+// 出来事の印を付けた句が、その出来事に実際に（否定ではなく）触れているか
+function mentions(i: Incident, say: string): boolean {
+  const base = INCIDENT_WORDS[i];
+  if (!base) return true;
+  const re = new RegExp(base.source, "g");
+  for (let m = re.exec(say); m; m = re.exec(say)) {
+    if (!NEGATION_BEFORE.test(say.slice(0, m.index))) return true;
+  }
+  return false;
+}
+
 // 出来事の印を付けた句が、その出来事に実際に触れているかの目安
 const INCIDENT_WORDS: Partial<Record<Incident, RegExp>> = {
   blackout: /停电|灯|黑|蜡烛/,
@@ -117,10 +131,11 @@ export class StoryTurn {
   due(plot: PlotStage): Incident | null {
     if (this.stepped || plot === "meet" || plot === "ending") return null;
     const st = this.state;
+    // 直前のターンに出来事が起きたばかりなら、このターンはその反応に使わせ、保底は 1 ターン待つ
+    //（停電の翌ターンにすぐ月が出る、のような連発を防ぐ。門铃→打烊の間隔もこれで賄う）
+    if (st.recent && st.lastStep === this.userTurn - 1) return null;
     for (const [i, turn] of INCIDENT_DUE) {
       if (this.userTurn < turn || st.flags.includes(i) || !this.allowed(i, st, plot)) continue;
-      // 門铃の直後のターンは打烊を補わない（門铃への反応に使う）
-      if (i === "closing" && st.recent === "doorbell" && st.lastStep === this.userTurn - 1) continue;
       return i;
     }
     return null;
@@ -192,8 +207,8 @@ export class StoryTurn {
       const free = beat.incident === "lights_on" || beat.incident === "arrival";
       const outer = OUTER.has(beat.incident);
       const room = free || (outer ? !this.outerDone : !this.progressed);
-      // 台詞がその出来事に触れていない句に付いた印は無効（音や演出が無関係な台詞に重ならないように）
-      const fits = !INCIDENT_WORDS[beat.incident] || INCIDENT_WORDS[beat.incident]!.test(beat.say);
+      // 台詞がその出来事に（否定ではなく）触れていない句に付いた印は無効（音や演出が無関係な台詞に重ならないように）
+      const fits = mentions(beat.incident, beat.say);
       if (this.allowed(beat.incident, st, plot) && room && fits) {
         if (!free) {
           if (outer) this.outerDone = true;
@@ -252,7 +267,7 @@ export class StoryTurn {
 
   // 印の無い句が引き取ってよい出来事：預かり中のもの、または期限（の 1 ターン前）が来ているもの
   private adoptable(say: string, st: StoryState, plot: PlotStage): Incident | null {
-    const match = (i: Incident) => this.allowed(i, st, plot) && !!INCIDENT_WORDS[i]?.test(say);
+    const match = (i: Incident) => this.allowed(i, st, plot) && !!INCIDENT_WORDS[i] && mentions(i, say);
     if (this.pending && match(this.pending)) return this.pending;
     for (const [i, turn] of INCIDENT_DUE) if (this.userTurn >= turn - 1 && match(i)) return i;
     return null;
