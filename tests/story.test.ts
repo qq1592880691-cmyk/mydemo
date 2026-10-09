@@ -57,6 +57,11 @@ describe("提示词：选项不被 Mira 说出口", () => {
 });
 
 describe("提示词：人设与节奏", () => {
+  it("系统提示明确：接住不等于附和，不复述用户刚说的事实", () => {
+    expect(SYSTEM_PROMPT).toContain("不等于附和");
+    expect(SYSTEM_PROMPT).toContain("不要复述");
+  });
+
   it("系统提示明确 Mira 是客人不是店员，不说欢迎光临，不替用户编话", () => {
     expect(SYSTEM_PROMPT).toContain("不是店员");
     expect(SYSTEM_PROMPT).toContain("欢迎光临");
