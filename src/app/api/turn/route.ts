@@ -3,6 +3,7 @@ import { withTimeout } from "@/lib/providers/types";
 import { Beat, BeatAudio, INITIAL_STORY, StreamEvent, StutterLimiter, TurnRequest, dropRepeatedSentences, normalizeBeat, normalizeChoices } from "@/lib/protocol";
 import { applyPlotHooks } from "@/lib/story";
 import { FIN_LINE, FORCED_LINE, StoryTurn, userTurnOf } from "@/lib/storyState";
+import { Utterance, logUtterance } from "@/lib/transcript";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,6 +43,10 @@ export async function POST(req: Request) {
   const enc = new TextEncoder();
   const turnId = body.turnId;
   const ctx = { sessionId: body.sessionId, turnId };
+  // 可読の対話記録（transcript 表）。ユーザー入力は seq -1、Mira の句は節拍の seq で再生順に残す
+  const record = (u: Omit<Utterance, "sessionId" | "turnId">) => logUtterance({ sessionId: body.sessionId, turnId, ...u });
+  if (body.input.kind === "text") record({ seq: -1, who: "user", kind: "text", text: body.input.text });
+  else if (body.input.kind === "start") record({ seq: -1, who: "user", kind: "start", text: "（推门走进咖啡馆）" });
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -116,6 +121,7 @@ export async function POST(req: Request) {
       let chain = Promise.resolve();
       let emitted = 0;
       const play = (beat: Beat, voice: Voice) => {
+        record({ seq: beat.seq, who: "mira", kind: "beat", text: beat.say, emotion: beat.emotion, incident: beat.incident });
         chain = chain.then(() => emit(beat, voice, emitted++ === 0));
       };
       const stutter = new StutterLimiter();
@@ -132,6 +138,7 @@ export async function POST(req: Request) {
           if (r.done) break;
           const obj = r.value;
           if ("heard" in obj && typeof obj.heard === "string") {
+            record({ seq: -1, who: "user", kind: "audio", text: obj.heard });
             send({ type: "heard", turnId, text: obj.heard });
             send({ type: "metric", turnId, name: "heard", ms: Date.now() - t0 });
             continue;

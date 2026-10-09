@@ -1,0 +1,7 @@
+.transcripts .dialogue { border: 1px solid rgba(255,255,255,.08); border-radius: 8px; padding: 8px 16px 16px; }
+.transcripts .turn { margin: 14px 0 4px; opacity: .45; font-size: 12px; }
+.transcripts .line { display: flex; gap: 10px; padding: 5px 0; align-items: baseline; }
+.transcripts .line > b { flex: 0 0 44px; color: #ffcf8a; font-weight: 600; }
+.transcripts .line.user > b { color: #8fc9ff; }
+.transcripts .line .text { white-space: pre-wrap; }
+.transcripts .tag { font-size: 11px; opacity: .65; border: 1px solid rgba(255,255,255,.22); border-radius: 4px; padding: 0 5px; margin-left: 8px; white-space: nowrap; }

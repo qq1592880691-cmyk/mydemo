@@ -70,7 +70,9 @@ export default function StatsPage() {
     <main className="stats">
       <header>
         <h1>AI 调用观测</h1>
-        <Link href="/">← 回到咖啡馆</Link>
+        <span>
+          <Link href="/transcripts">对话记录</Link>　<Link href="/">← 回到咖啡馆</Link>
+        </span>
       </header>
 
       <section className="cards">
