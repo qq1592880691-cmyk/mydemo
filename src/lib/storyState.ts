@@ -90,6 +90,8 @@ export class StoryTurn {
   private progressed = false;
   private outerDone = false;
   private stepped = false;
+  // 無関係な句に付いた出来事の印を預かり、同じターン内でその出来事に触れた句へ付け替える
+  private pending: Incident | null = null;
   private enteredEnding = false;
   private readonly endingAtStart: Ending;
 
@@ -178,6 +180,13 @@ export class StoryTurn {
       delete beat.event;
     }
 
+    // 印の無い句でも、預かり中の出来事や期限が来た出来事に台詞が触れていれば、その句で起こす
+    //（モデルが印を付け忘れた・別の句に付けたとき、保底の一句と同じ出来事を二度演じないため）
+    if (!beat.incident) {
+      const adopted = this.adoptable(beat.say, st, plot);
+      if (adopted) beat.incident = adopted;
+    }
+
     if (beat.incident) {
       // 来電と「彼の到着」は結末の演出の一部なので制限に数えない
       const free = beat.incident === "lights_on" || beat.incident === "arrival";
@@ -195,7 +204,10 @@ export class StoryTurn {
         st.recent = beat.incident;
         changed = true;
         present(beat, beat.incident);
+        if (this.pending === beat.incident) this.pending = null;
       } else {
+        // 台詞が出来事に触れていないだけなら、印を預かって後の句に付け替える
+        if (room && !fits && this.allowed(beat.incident, st, plot)) this.pending = beat.incident;
         delete beat.incident;
       }
     }
@@ -236,6 +248,14 @@ export class StoryTurn {
       beat.story = st;
     }
     return beat;
+  }
+
+  // 印の無い句が引き取ってよい出来事：預かり中のもの、または期限（の 1 ターン前）が来ているもの
+  private adoptable(say: string, st: StoryState, plot: PlotStage): Incident | null {
+    const match = (i: Incident) => this.allowed(i, st, plot) && !!INCIDENT_WORDS[i]?.test(say);
+    if (this.pending && match(this.pending)) return this.pending;
+    for (const [i, turn] of INCIDENT_DUE) if (this.userTurn >= turn - 1 && match(i)) return i;
+    return null;
   }
 
   private allowed(i: Incident, st: StoryState, plot: PlotStage): boolean {

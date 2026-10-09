@@ -246,6 +246,30 @@ describe("事件要和台词对得上", () => {
     expect(normalizeAndApply({ trust: 5, flags: ["old_photo", "doorbell"] }, { say: "我们去看看就知道了。", incident: "closing" }).incident).toBeUndefined();
   });
 
+  it("事件标在不相干的句子上时，顺延给同一轮里真正提到它的句子", () => {
+    const t = new StoryTurn({ trust: 5, flags: [] }, 5);
+    // 模型把 blackout 标在了没提停电的句子上：该句的标记无效
+    expect(t.apply(beat({ say: "啊？等……一个朋友啦。", incident: "blackout" }), "chat").incident).toBeUndefined();
+    // 后面真正说"停电"的句子接过这个事件，旗子立起来，保底不再补第二句
+    const b = t.apply(beat({ say: "呀，停电了！" }), "chat");
+    expect(b.incident).toBe("blackout");
+    expect(b.story?.flags).toContain("blackout");
+    expect(t.due("chat")).toBeNull();
+  });
+
+  it("到期的事件只出现在台词里而没标记时，自动补上标记，保底不再重复", () => {
+    const t = new StoryTurn({ trust: 5, flags: [] }, 5);
+    const b = t.apply(beat({ say: "呀，停电了！" }), "chat");
+    expect(b.incident).toBe("blackout");
+    expect(t.due("chat")).toBeNull();
+  });
+
+  it("没到期、也没被标记过的事件，不会光凭台词就触发", () => {
+    const t = new StoryTurn({ trust: 5, flags: [] }, 2);
+    expect(t.apply(beat({ say: "要是停电了可怎么办呀。" }), "chat").incident).toBeUndefined();
+    expect(t.state.flags).toEqual([]);
+  });
+
   it("进入重逢但没有他出现时，dueArrival 为真", () => {
     const t = new StoryTurn({ trust: 9, flags: ["old_photo", "doorbell"] }, 13);
     t.apply(applyPlotHooks(t.gate(beat({ plot: "ending", ending: "reunion" }), "reveal"), "reveal"), "reveal");

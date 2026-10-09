@@ -1,6 +1,6 @@
 import { GoogleGenAI, ThinkingLevel, type Part } from "@google/genai";
 import { Beat, BeatAudio, Emotion, TurnRequest } from "../protocol";
-import { SYSTEM_PROMPT, buildUserPrompt, photoPrompt } from "../story";
+import { SYSTEM_PROMPT, buildTurnPrompt, photoPrompt } from "../story";
 import { pcm16ToWav } from "../wav";
 import { CallCtx, ModelRow, Purpose, getModel, listByPurpose, logCall, resolveKey, statusOf, usageFromGemini, usageFromInteraction } from "../aiRegistry";
 import { openaiTtsStream } from "./openai";
@@ -68,9 +68,10 @@ export class GeminiProvider implements Provider {
   async *reply(req: TurnRequest, signal: AbortSignal): AsyncIterable<ReplyChunk> {
     const { ai, row } = clientFor(getModel("gemini", "text"));
     const ctx: CallCtx = { sessionId: req.sessionId, turnId: req.turnId };
-    const parts: Part[] = [{ text: buildUserPrompt(req.input, req.history, req.scene, req.plot, req.story) }];
+    // 履歴は普通の多ターン会話として渡す（user / model の交互メッセージ）。最後の user メッセージに演出指示と今回の入力が入る
+    const contents = buildTurnPrompt(req.input, req.history, req.scene, req.plot, req.story).map((t) => ({ role: t.role, parts: [{ text: t.text }] as Part[] }));
     if (req.input.kind === "audio") {
-      parts.push({ inlineData: { mimeType: req.input.mime, data: req.input.b64 } });
+      contents[contents.length - 1].parts.push({ inlineData: { mimeType: req.input.mime, data: req.input.b64 } });
     }
     const t0 = Date.now();
     let usageMeta: Parameters<typeof usageFromGemini>[0];
@@ -80,7 +81,7 @@ export class GeminiProvider implements Provider {
       const open = () =>
         ai.models.generateContentStream({
           model: row.model_id,
-          contents: [{ role: "user", parts }],
+          contents,
           config: {
             systemInstruction: SYSTEM_PROMPT,
             temperature: 0.9,

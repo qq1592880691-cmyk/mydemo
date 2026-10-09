@@ -38,6 +38,8 @@ export const SYSTEM_PROMPT = `你是 Mira，26 岁的旅行摄影师（原创成
 - 你是有来有往的聊天对象，不是被审问的人：每轮除了回应，还要给出一点自己的东西——一个具体的小细节、一小段经历，或者反问对方一个具体的问题。不要只回"嗯……算是吧""还好吧"这种敷衍的话。
 - 剧情只在两种时候推进：用户的话题自然引到那里，或者对话冷场了。心事可以慢慢说，但每次被问到都要多说出一点新的东西，不要原地打转、反复回避。
 - 你问过用户的问题，他回答了就要接着他的回答聊，不要自顾自换话题。
+- 提示里「推动剧情的选项」给出的示例是用户的候选台词，不是你的话，绝不能出现在 say 里。
+- 字条、照片和三年前的往事都是你和"他"之间的事，和眼前的用户无关；不要把这些事安到用户头上（比如问用户"他有没有给你留过话"就是错的）。
 - 通常 1~2 句，最多 3 句，每句不超过 25 个字。用户问什么就先直接回答，不要绕。
 - 不要重复你之前说过的句子或意思。三年前的往事已经讲过的部分不要再讲第二遍，每轮最多往前讲一点新的；用户换个说法再问同一件事时，简短回应后把话题往前带。
 - 已经发生过的事（停电、月亮出来、字条、门铃等）提过一次就够了，后面不要反复提起。
@@ -62,15 +64,33 @@ export const SYSTEM_PROMPT = `你是 Mira，26 岁的旅行摄影师（原创成
 - plot：当剧情自然推进到下一阶段时，在那一句上标注新阶段；只能前进不能后退。推进阶段的那一轮不要再拿照片、看字条（停电、门铃这类外面来的意外可以）。
 - camera=close 用于亲密或关键的情绪时刻。`;
 
-export function buildUserPrompt(input: TurnInput, history: HistoryItem[], scene: SceneState, plot: PlotStage, story: StoryState = INITIAL_STORY): string {
-  const lines = history.slice(-16).map((h) =>
-    h.who === "user" ? `用户：${h.text}` : `Mira：${h.text}${h.interrupted ? "（话没说完就被用户打断了）" : ""}`,
-  );
+export interface PromptTurn {
+  role: "user" | "model";
+  text: string;
+}
+
+// 会話は普通の多ターン形式で渡す：user の発話はそのまま、Mira の句は出力協定と同じ NDJSON（{"say":…}）で
+// model 側に置き、最後に演出指示＋今回の入力を 1 つの user メッセージとして足す
+export function buildTurnPrompt(input: TurnInput, history: HistoryItem[], scene: SceneState, plot: PlotStage, story: StoryState = INITIAL_STORY): PromptTurn[] {
+  const turns: PromptTurn[] = [];
+  const add = (role: PromptTurn["role"], text: string) => {
+    const last = turns.at(-1);
+    if (last?.role === role) last.text += `\n${text}`;
+    else turns.push({ role, text });
+  };
+  const recent = history.slice(-16);
+  // 冒頭が Mira の句なら、開幕の「推门」を user 側に補って必ず user から始める
+  if (recent[0]?.who === "mira") add("user", "（用户推门走进咖啡馆，门铃响了。）");
+  for (const h of recent) {
+    if (h.who === "user") add("user", h.text);
+    else add("model", JSON.stringify(h.interrupted ? { say: h.text, interrupted: true } : { say: h.text }));
+  }
+
   const userTurns = history.filter((h) => h.who === "user").length;
   const cur = userTurnOf(history, input.kind);
   const hints = storyHints(plot, story, userTurns, cur - (story.lastStep ?? 0), cur);
   // 前のターンの終わりに起きた出来事には、このターンでまず一言反応させる（電話や門铃を無視したまま流さない）
-  if (story.recent && story.lastStep === userTurnOf(history, input.kind) - 1 && REACT[story.recent])
+  if (story.recent && story.lastStep === cur - 1 && REACT[story.recent])
     hints.unshift(`上一轮最后刚发生：${REACT[story.recent]} 这一轮先用一句话对它做出反应，再回应用户。`);
   const current =
     input.kind === "start"
@@ -78,16 +98,17 @@ export function buildUserPrompt(input: TurnInput, history: HistoryItem[], scene:
       : input.kind === "text"
         ? `用户：${input.text}`
         : '（用户这轮是语音，见附带音频。第一行必须先输出 {"heard":"<用户语音的转写>"}，再输出表演节拍。如果音频里听不清或没有人声，heard 输出空字符串，不要猜测或编造，然后只用一句话请对方再说一遍。）';
-  return `## 当前状态
+  add(
+    "user",
+    `## 当前状态
 剧情阶段：${plot} —— ${PLOT_GUIDE[plot]}
 天气：${scene.weather}；镜头：${scene.camera}；灯光：${scene.lights === "off" ? "停电了，只有烛光" : scene.lights === "dim" ? "暗了一半（快打烊了）" : "正常"}${story.noteText ? `\n留言墙上他的字条原文：「${story.noteText}」（提到时必须和原文一致）` : ""}
 ${hints.map((h) => `提示：${h}`).join("\n")}
 
-## 对话记录
-${lines.join("\n") || "（无）"}
-
 ## 本轮（先接住这一句）
-${current}`;
+${current}`,
+  );
+  return turns;
 }
 
 // 阶段と経過ターンから、今回起こしてよい出来事と結末の筋書きを指示する
@@ -151,7 +172,7 @@ function storyHints(plot: PlotStage, story: StoryState, userTurns: number, gap: 
     hints.push(`结局（已确定：${ENDING_GUIDE[story.ending].title}）的后半段：${ENDING_GUIDE[story.ending].close} 先回应用户这句话，再演这一段，最后一句加 "fin":true。`);
   if (story.fin) hints.push("结局已经演完。简短地回应用户，像故事结束后的余韵。");
   const push = choiceHint(plot, story);
-  if (push) hints.push(`推动剧情的选项：${push}`);
+  if (push) hints.push(`推动剧情的选项（用户的话，不能由你说出口）：${push}`);
   return hints;
 }
 
