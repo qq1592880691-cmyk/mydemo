@@ -2,24 +2,19 @@
 
 > 演示录屏：https://github.com/qq1592880691-cmyk/mydemo/releases/download/v1.0/demo.mov
 
-移动端优先的实时互动场景：暴雨夜，快打烊的咖啡馆，用户打字或说话，和旅行摄影师 Mira 聊天。她用带情绪的语音回话，有口型、表情和动作；聊着聊着会停电点蜡烛、雨小了看月亮、翻出三年前的照片、看留言墙的字条、接到陌生来电，店长还会在后厨催打烊。聊到照片相关的话题时，她会现场"冲洗"一张根据对话生成的照片。一局 14 轮上下，3–5 分钟，按你的态度走向重逢、释然或告别三种结局。每轮说完给 3 个回复选项，不想打字点选项也能玩下去。配乐随剧情换，雨声是实时合成的。
+暴雨夜，快打烊的咖啡馆，用户打字或说话，和旅行摄影师 Mira 聊天。她用带情绪的语音回话，有口型、表情和动作；剧情里会停电点蜡烛、雨小看月亮、翻出三年前的照片，聊到照片时还会现场"冲洗"一张生成的照片。一局 14 轮左右（3–5 分钟），按用户的态度走向重逢、释然或告别三种结局。
 
-## 快速开始
+## 启动
 
 ```bash
-bash start.sh          # 或 npm run demo；首次会自动 npm install，然后构建并以生产模式启动
+bash start.sh          # 首次自动 npm install，构建后以生产模式启动
 ```
 
-打开 http://localhost:3000 。从装依赖到跑起来大概 3 分钟。
+打开 http://localhost:3000 ，从装依赖到跑起来约 3 分钟。
 
-- 不配密钥也能玩：没有 `GEMINI_API_KEY` 时自动进 Mock 模式，剧情分支、打断、生图、故障演示都在。右上角徽章会显示当前是 `MOCK` 还是 `GEMINI`。
-- 真实模式在 `.env.local` 里填 `GEMINI_API_KEY`（照着 `.env.example`）。`OPENAI_API_KEY` 只有重新生成立绘、或把 TTS 换到 OpenAI 时才用得到。
-- 立绘（`public/sprites`）、配乐（`public/bgm`）、店长的语音（`public/sfx`）都在仓库里，运行时不用再生成。
-- 开场卡片显示的同时后台就在预加载第一轮，点「推门进去」半秒左右开口。
-- URL 参数：`?mock=1` 强制 Mock；`?debug=1` 开观测面板；`?fail=tts|llm_timeout|drop|image` 注入故障。
-- `start.sh` 走生产模式，因为 dev 模式第一次对话要现场编译 API 路由（18–26 秒），会撞上 20 秒的首包超时。开发时正常用 `npm run dev` 就行。
-- 手机上用麦克风需要 HTTPS（localhost 除外），局域网调试可以 `npx next dev --experimental-https`。
-- 测试：`npm test` 跑单元测试，端到端见下文「测试」。
+- 不配密钥自动进 Mock 模式，剧情、打断、生图、故障演示都能体验；真实模式在 `.env.local` 填 `GEMINI_API_KEY`（照 `.env.example`）。
+- URL 参数：`?mock=1` 强制 Mock；`?debug=1` 观测面板；`?fail=tts|llm_timeout|drop|image` 注入故障。
+- 立绘、配乐、音效已随仓库提供。测试：`npm test`（单元 69 个）；`python3 e2e/mock_e2e.py`（Playwright，32 项，无需密钥）。
 
 ## 系统结构
 
@@ -27,204 +22,84 @@ bash start.sh          # 或 npm run demo；首次会自动 npm install，然后
 浏览器                                              Next.js 服务端 (Route Handlers)
 ┌───────────────────────────────────────┐          ┌─────────────────────────────────────┐
 │ Experience (React)                    │          │ POST /api/turn  → SSE 事件流         │
-│  ├ CafeScene  窗外天气/雨/灯/烛光/桌   │  fetch   │   provider.reply()  流式 NDJSON 节拍  │
-│  ├ Character  立绘 表情/动作/口型/晃动 │ ───────▶ │   normalizeBeat()   校验/降级枚举      │
-│  ├ 字幕 / 照片卡 / 结局卡 / HUD / 观测 │  SSE     │   applyPlotHooks()  剧情节点确定性演出 │
-│  │                                    │ ◀─────── │   StoryTurn         信任值/事件/结局   │
-│ TurnController  (框架无关，可单测)     │          │   TTS 并发合成 → 按 seq 顺序下发       │
-│  epoch / turnId / AbortController     │          │ POST /api/image → 生成照片(带缓存)     │
-│ BrowserAudio  WebAudio+口型电平+降级   │          │                                     │
-│ Soundscape    配乐/雨声/雷声/门铃      │          │ Provider 接口: Gemini | Mock          │
-│ MicRecorder   按住说话 → 16k WAV       │          │ SQLite: 模型 Master / 调用记录         │
-└───────────────────────────────────────┘          └─────────────────────────────────────┘
+│  ├ CafeScene  窗外天气/雨/灯/烛光      │  fetch   │   provider.reply()  流式 NDJSON 节拍  │
+│  ├ Character  立绘 表情/动作/口型      │ ───────▶ │   normalizeBeat()   校验/降级枚举      │
+│  ├ 字幕 / 照片卡 / 结局卡              │  SSE     │   StoryTurn         信任值/事件/结局   │
+│ TurnController  回合状态机(可单测)     │ ◀─────── │   TTS 并发合成 → 按 seq 顺序下发       │
+│ BrowserAudio / Soundscape / 麦克风     │          │ POST /api/image → 生成照片(带缓存)     │
+└───────────────────────────────────────┘          │ Provider: Gemini | Mock；SQLite 记录   │
+                                                   └─────────────────────────────────────┘
 ```
 
-| 模块 | 文件 | 职责 |
-|---|---|---|
-| 协议 | `src/lib/protocol.ts` | 节拍(Beat)、剧情状态与流事件类型、LLM 输出校验 |
-| 剧情 | `src/lib/story.ts` | 人设/对话原则/输出协议 prompt、剧情阶段与事件提示、节点钩子 |
-| 剧情状态 | `src/lib/storyState.ts` | 信任值累加与限幅、事件去重与确定性演出、结局判定与锁定、每轮推进限制 |
-| Provider | `src/lib/providers/*` | `reply / tts / image` 三个能力；Gemini、OpenAI(TTS)、Mock 可替换 |
-| 回合 API | `src/app/api/turn/route.ts` | SSE 流、超时、TTS 并发与顺序化、取消传递 |
-| 状态机 | `src/client/turnController.ts` | 待机/倾听/思考/说话，打断与失效响应过滤 |
-| 浏览器 I/O | `src/client/browserDeps.ts` | SSE 解析、音频播放/降级、口型电平与频谱、录音编码 |
-| 声音 | `src/client/soundscape.ts` | 配乐交叉淡化与说话时压低、雨声/雷声/门铃合成 |
-| 表现层 | `src/components/*` | 场景、角色、照片、结局卡、HUD、观测面板 |
-| 素材脚本 | `scripts/gen-sprites.ts`、`scripts/gen-bgm.ts` | 立绘差分生成与合成、配乐生成 |
+主要模块：协议与校验 `src/lib/protocol.ts`；prompt 与剧情提示 `src/lib/story.ts`；剧情状态机 `src/lib/storyState.ts`；Provider 抽象 `src/lib/providers/*`；回合 API `src/app/api/turn/route.ts`；客户端状态机 `src/client/turnController.ts`；音频与口型 `src/client/browserDeps.ts`。
 
 ## 语音交互与打断
 
-链路：按住说话 → 录音编码成 16kHz WAV → 一次多模态调用同时完成"听懂 + 回复"（模型第一行输出 `{"heard": 转写}`，后面是表演节拍）→ 每个节拍并发做 TTS → 服务端按顺序下发 → 客户端逐拍播放，每个节拍开始时切表情、动作、场景和字幕。STT 并进 LLM 调用是为了省一次往返；按句做 TTS 是为了第一句话不用等整段回复。
+链路：按住说话 → 16kHz WAV → 一次多模态调用完成"听懂 + 回复"（第一行输出转写，后面是表演节拍）→ 每句并发 TTS → 按顺序下发 → 客户端逐句播放，同步切表情、动作、场景、字幕。
 
-交互用的是按住说话（桌面也可以长按空格），她说话时按下去就是打断。没用自动 VAD，原因：手机浏览器的回声消除不太靠谱，Mira 自己的声音经常会触发"自我打断"；按下的那一瞬间就是明确的打断时刻，可以零延迟停音，行为也好测试；另外不用下载 VAD 模型，弱网也能用。自动 VAD 放在后续计划里。
+交互选了按住说话（桌面可长按空格），她说话时按下即打断。没用自动 VAD：手机浏览器回声消除不可靠，Mira 的声音会触发"自我打断"；按下的瞬间就是明确的打断时刻，可以零延迟停音，行为也好测试。
 
-打断时发生的事（`TurnController.cancel`）：
-
-```
-epoch++                       ← 所有旧的异步回调在下一个 await 之后自检 epoch，不一致立即退出
-abort(网络)  abort(播放)       ← fetch 断开 → 服务端 req.signal 级联取消 LLM / TTS
-audio.stop()                  ← WebAudio source.stop() / speechSynthesis.cancel()
-queue = []                    ← 未播放的字幕、动作、媒体事件全部丢弃
-生成中的照片 → abort 并移除
-已说出的半句 → 写入历史并标记"被打断"，下一轮 LLM 知道自己话没说完
-state = listening
-```
-
-旧响应想"复活"要过三道关：`epoch` 每次取消或开新回合都自增，异步回调在 await 之后都会比对；请求带 `turnId`，服务端每个事件回传，对不上的直接丢掉并记一条 `stale_dropped`；网络和播放是两个 AbortController，超时断线只掐网络，已经收到的节拍照常播完再报错，用户主动打断才两个一起掐。
-
-这些行为在 `tests/turnController.test.ts` 里有 8 个用例盯着：打断后迟到的响应不播、连按三次只播最后一轮、turnId 不匹配丢弃、首包超时、中途断线、照片生成中被打断等。
+打断时：停止播放、丢弃未播放的字幕/动作/照片、取消进行中的网络请求和生成、说到一半的句子写入历史并标记"被打断"（下一轮模型知道自己话没说完）、切到倾听。旧响应有三道关挡着不会复活：epoch 自增 + 事件带 turnId 校验 + 网络和播放分开的 AbortController（超时断线只掐网络，已收到的句子照常播完）。
 
 ## 角色与场景指令
 
-模型输出 NDJSON，一行一个"节拍"，就是一句台词加上这句话对应的表演：
+模型输出 NDJSON，一行一个"节拍"——一句台词加它的表演：
 
 ```json
 {"say":"嗯……<short pause>算是吧。","emotion":"shy","action":"touch_hairpin","plot":"reveal","trust":1}
-{"say":"就是这张。","emotion":"shy","action":"give_photo","incident":"old_photo"}
-{"say":"这张是里斯本的雨夜。","emotion":"happy","action":"raise_camera",
- "event":{"type":"photo","subject":"a rain-soaked night street in Lisbon...","caption":"里斯本的雨夜"}}
-{"say":"路上小心。晚安。","emotion":"neutral","action":"wave","fin":true}
+{"say":"这张是里斯本的雨夜。","emotion":"happy","action":"raise_camera","event":{"type":"photo","subject":"..."}}
 ```
 
 | 字段 | 取值 | 表现 |
 |---|---|---|
-| say | 台词，可含声音标签 `<sigh>` `<laugh>` `<gasp>` `<breath>` `<short pause>` `<long pause>` | 字幕显示去掉标签的文本；标签只交给 TTS 演成叹气、轻笑、停顿 |
-| emotion | neutral / happy / shy / sad / surprised | 表情差分切换；同时决定 TTS 的语气（style） |
-| action | sip / look_window / touch_hairpin / raise_camera / nod / chin_rest / laugh / give_photo / look_door / hold_candle / wipe_tears / wave / check_phone | 12 张动作立绘 + 点头动画 |
-| scene.weather | storm / rain / clear | 雨量、雨声渐变，夜空/月亮/街灯过渡 |
-| scene.camera | wide / close | 整体镜头推近（关键情绪时刻） |
-| scene.lights | on / off / dim | 停电：灯灭、只剩烛光，配乐停止；打烊前：灯光减半 |
-| fx | lightning / sparkle | 闪电闪屏 + 雷声 / 星光 |
-| event | photo | 生成一张照片，"显影中"→显影动画 / 失败可重洗 |
-| plot | meet → chat → reveal → ending | 剧情阶段，只能前进 |
-| trust | -2 … 2 | 本句对用户的信任变化（隐藏好感值） |
-| incident | blackout / lights_on / moon / old_photo / note / phone / doorbell / closing / arrival | 剧情事件（见下文） |
-| note | 便利贴原文 | 与 `incident: note` 一起出现，显示为留言墙字条卡片 |
-| ending | reunion / letgo | 进入结局那句上，模型按用户的劝说选择（只能从重逢降为释然） |
-| fin | true | 结局最后一句，演完后显示结局卡 |
-| choices（回合末尾单独一行） | 3 个短句 | 说完后显示为可点击的回复选项，点击即作为用户输入发送 |
+| say | 台词，可含 `<sigh>` `<laugh>` 等声音标签 | 字幕去标签显示；标签交给 TTS 演成叹气、轻笑、停顿 |
+| emotion | neutral / happy / shy / sad / surprised | 表情差分 + TTS 语气 |
+| action | 12 种（sip / give_photo / hold_candle / wave …） | 动作立绘 |
+| scene | weather: storm/rain/clear；camera: wide/close；lights: on/off/dim | 雨量雨声、镜头推近、停电烛光 |
+| fx | lightning / sparkle | 闪电 + 雷声 / 星光 |
+| event | photo | 生成照片，"显影中"→显影，失败可重洗 |
+| plot / trust / incident / fin | 剧情阶段、信任增减、剧情事件、结局收尾 | 驱动剧情推进（见下） |
+| choices（末尾一行） | 3 个短句 | 回复选项，点击即发送 |
 
-### 剧情系统
-
-状态是 `story = { trust, flags, ending, fin, lastStep }`，放在客户端，每轮随请求发上来。服务端 `StoryTurn` 逐句更新，更新结果挂在节拍上发回去，客户端播到那一句才应用——这样状态变化和表情、场景同步，打断时没播到的变化也一起作废。
-
-中间事件的演出由服务端补全，不指望模型每个字段都记得写：
-
-| 事件 | 演出 |
-|---|---|
-| 停电 blackout | 闪电 + 雷声，灯灭只剩烛光，捧蜡烛立绘，配乐停 |
-| 雨小了 moon | 雨势减弱、窗外露出月亮，举相机，生成一张窗景照片 |
-| 旧照片 old_photo | 递照片立绘 + 三年前的照片卡 |
-| 留言墙字条 note | 便利贴卡片，内容由模型即兴写（缺省时用固定文面） |
-| 手机响 phone | 震动音效 + 看手机立绘，选项给"接吧 / 别接" |
-| 门铃 doorbell | 门铃声 + 望向门口（只是风） |
-| 店长催打烊 closing | 后厨传来店长的声音（另一个 TTS 音色预生成）+ 旁白字幕，灯光减半 |
-
-节奏上模型自由发挥，时间表兜底。prompt 按时机提示"可以触发"，快到期改成"本轮必须"；真过了期还没发生，服务端就在这轮回答的最后补一句固定台词把事件带出来（比如"……门铃？"），下一轮提示她先对这事做个反应。阶段也有保底：第 2 轮进闲聊、第 6 轮开始吐露、打烊之后第 13 轮进结局。各事件的期限（按用户第几次发言算）：停电 4、雨小 5、旧照片 7、字条 9、门铃 10、打烊 12。手机响是可选场景，不在表里。有一条例外规则：上一轮刚发生过事件的话，这一轮不补也不催，先让两个人把刚才的事聊完，不然会出现停电下一轮马上月亮出来那种赶场感。点选项还是自由聊都能在 14–16 轮走到结局。
-
-带事件标记的那句台词必须真的提到这个事件（门铃那句得有"门"或"铃"，打烊那句得提打烊或店长），否则标记作废、交给保底补句，免得门铃声配着一句不相干的话。否定和假设不算提到："没停电""要是停电"不会触发停电。反过来，模型嘴上演了事件却把标记写漏或写错句子时，服务端会把标记转给真正说出这个事件的那句（漏写只在临近期限时才这样认领）。不然会出现模型说了"停电了"、保底又补一句"停电了"的尴尬。字条的原文存在剧情状态里，之后每轮 prompt 都带上，保证她每次引用一字不差。
-
-结局分两轮演：进结局那轮只演到高潮（他出现 / 雨停了决定不等 / 要打烊了），下一轮才道谢告别、出结局卡。重逢结局如果模型没演"他出现"，或者第二轮忘了收尾，服务端各补一句。三种结局在进 ending 时锁定：信任值够高（≥7）而且门铃响过，就看用户怎么劝——劝她再等就是重逢，劝她放下就是释然；信任 ≤3 是告别（雨不停，也不拍照）；其余是释然（雨停，拍照留念）。门铃没响之前不许进结局，重逢得有伏笔。
-
-回复选项是每轮末尾模型顺手生成的（跟台词同一次调用，不另花时间）：第 1 个接着当前话题，第 2 个换个角度或轻松一点，第 3 个固定往剧情方向推——服务端按阶段告诉模型往哪推，比如门铃之后会同时给"我陪你再等一会儿"和"也许该放下了"，点哪个直接影响结局。不知道说什么的话，一路点选项也能玩完。
-
-发给模型的上下文就是正常的多轮对话：用户的话原样做 user 消息，Mira 的句子按输出协议的 NDJSON 做 model 消息（被打断的句子带 `"interrupted":true`），如果是 Mira 开的场就在最前面补一条"推门进店"的 user 消息，剧情阶段、事件提示和本轮输入放在最后一条 user 消息里。早期版本是把一切拼成一条大 prompt，调用日志没法读，模型也得靠"用户：/Mira："前缀自己猜，后来改掉了。
-
-剧情永远让位于对话。prompt 里优先级最高的一条是"先接住用户这一句"：用户在开玩笑、闲扯，就陪聊，不推剧情不讲心事。事件分两类，停电、门铃这种外面来的意外可以打断闲聊，拿照片、下决心这种内心戏只在用户认真聊的时候推。每轮最多一次内心推进加一次外部意外。台词每轮通常 1–2 句、最多 3 句，先回答用户问的，再给出点自己的东西（细节、经历或反问），讲过的往事不再重讲。服务端另有几道闸：普通台词每轮最多 3 句，"你、你"式结巴每轮只留一处，和最近几轮重复的句子按句剔掉（带剧情标记的不剔），模型偶尔一句都没吐的时候补一句"我有点走神了"。核心设定（等的是三年前遇到的陌生男人）写死在人设里，免得模型自己编出矛盾的背景。
-
-几个取舍：以"句"为单位而不是整段回复配一个情绪，是因为这样表情、动作、字幕、语音天然对齐，打断时也知道精确说到了哪一句。服务端对模型输出全部校验，枚举外的值降级成默认、未知声音标签剔掉、信任值限幅，模型偶尔不守协议不会把前端搞坏。阶段、事件、结局这些"必须成立"的东西由服务端保证，台词、情绪、何时触发交给模型。角色的待机/倾听/思考/说话状态由客户端状态机决定，不问模型。
-
-对照题目要求：情绪 5 种（要求 ≥3）；非说话动作 12 种外加待机呼吸、眨眼、思考气泡（要求 ≥2）；环境变化有停电烛光、雨小见月、打烊灯暗、雨停、镜头推近（要求 ≥1）；对话触发的视觉事件有生成照片和旧照片/字条/来电/门铃等剧情节点（要求 ≥1），都不是定时器触发的。
+剧情状态（信任值、已发生事件、结局）放在客户端、每轮随请求发送，服务端逐句更新后挂在节拍上发回，播到那句才生效，打断时未播的变化一起作废。节奏是模型自由加时间表保底：prompt 按时机提示"可以触发"，到期还没发生就由服务端补一句固定台词带出来；事件标记必须和台词对得上（否定句"没停电"不算数），不符就作废改走保底。结局在进入最后阶段时按信任值和用户的劝说锁定三选一。上下文按正常多轮对话发送（user / model 交替，Mira 的句子用输出协议同款 NDJSON）。
 
 ## 多模态表现
 
-- 角色立绘（`Character.tsx`）：原创动漫风，`npm run sprites` 用图像模型生成。先出一张基准图，再编辑出 4 种表情、11 个动作、1 张眨眼，每种表情配 3 种嘴型（半张 / a / o）。图像模型每次编辑都会把整张图重画一遍，直接切图的话头发衣服会跟着闪，所以表情差分只取脸部椭圆、嘴型差分只取嘴部椭圆，羽化后贴回基准图——嘴型图的上半张脸和基准图逐像素一致，张嘴时眼睛不会抖。切换时新图淡入、旧图等新图完全显示后再隐藏，避免两张半透明叠出"透明人"。
-- 口型：WebAudio `AnalyserNode` 拿音量包络（张快合慢）决定开口大小，频谱重心分 a / o 口形，每个口形至少保持 70ms，闭和开之间过渡经过半张。离线拿真实 TTS 音频调过，大约每秒 5 次口形变化，接近中文音节的节奏。
-- 说话时身体慢慢左右晃，语气重的地方轻轻点头；眨眼随机。这些只动 DOM，不走 React 重渲染。`prefers-reduced-motion` 时全关。
-- 语音：Gemini TTS 流式输出，语气由 emotion 映射的 style 控制，台词里的声音标签会被演成叹气、轻笑、停顿（细节见「模型与第三方」）。
-- 生成照片：对话触发 `event.photo` 后调 Gemini 图像模型生成胶片风照片。生成期间显示"显影中"，她继续说话承接；失败显示"照片受潮了"，可以点重试；同题材的结果有缓存。被打断就取消。每轮最多一张。
-- 声音：6 首配乐随剧情阶段和结局切换，切换时 3 秒交叉淡化，她说话时自动压低，停电时停掉。雨声、雷声、门铃都是 Web Audio 现场合成的，雨声大小跟着天气走。右上角可以静音。
-- 没有立绘素材时降级成代码画的 SVG 角色（`Mira.tsx`）。
+- 立绘：原创动漫风，图像模型生成基准图后编辑出表情/动作/口型差分；差分只取脸部或嘴部椭圆区域贴回基准图，避免整图重绘带来的闪动。共 33 张，无素材时降级为代码绘制的 SVG。
+- 口型：WebAudio 音量包络决定开口度、频谱重心分 a/o 口形，每口形至少 70ms。
+- 生成照片：对话触发后调 Gemini 生图（约 8s），期间显示"显影中"，失败可重试，结果有缓存，被打断即取消。
+- 声音：6 首配乐随剧情切换（交叉淡化、说话时压低）；雨声、雷声、门铃用 Web Audio 实时合成。
 
-## 失败与降级
-
-| 场景 | 处理 |
-|---|---|
-| 模型首包超时 | 服务端 15s 分块超时 + 客户端 20s 看门狗 → 提示条 + "重试" |
-| 回复中途断线 | 已收到的句子照常播完，然后提示可重试 |
-| TTS 失败 / 超时 | 该句降级为浏览器 `speechSynthesis` 朗读，没有中文音色时降级为纯字幕定时播放，提示条说明 |
-| 音频解码失败 | 同上 |
-| 生图失败 | 照片卡显示失败态 + 重洗按钮 |
-| 麦克风无权限 | 提示改用文字输入 |
-| 录音几乎无声（误触） | 不发送，提示"没听清"；模型听不清时转写为空，不写入历史 |
-| 配乐加载失败 | 静默跳过，不影响对话；雨声和音效为实时合成，不依赖文件 |
-
-观测面板（⚙ 或 `?debug=1`）能切 Mock 和故障注入，实时显示 `heard / first_line / first_audio / total / client_first_beat / image` 耗时、信任值、已触发事件，还有完整事件日志（含被丢弃的节拍数、stale 事件）。
-
-## 模型 Master 与调用记录（SQLite）
-
-首次启动自动在 `data/mira.db` 建表写初始数据（`db/schema.sql`、`db/seed.sql`，都是幂等语句），然后按编号跑 `db/migrations/*.sql`，每个只跑一次，记在 `schema_migrations` 里。`data/` 已 git 忽略。
-
-- `ai_model`（模型 Master）：provider（gemini / openai / mock）、用途（text / tts / image / sprite / music）、model_id、api_key、四类单价（按每 100 万 token）、是否默认、是否启用。每个用途取"启用 + 默认"那行；sprite 用途按顺序试，前一个挂了用下一个。`api_key` 空的话回退到 `.env.local` 里对应 provider 的密钥。改表即时生效，不用重启。
-- `ai_call_log`（调用记录）：每次模型调用一行——会话/回合、状态（ok / error / timeout / aborted）、耗时、各类 token、按单价算的费用、错误信息。被打断的流式调用也记（aborted，带已产生的 usage）。Mock 调用同样记录，费用为 0，所以无密钥也能看到调用链路。
-- 观测页 `/stats`：Master 一览（密钥只露末 4 位）、按模型汇总的次数/失败/平均耗时/token/费用、最近 100 次调用明细。
-- 对话记录页 `/transcripts`：`transcript` 表按播放顺序存每一句，包括用户输入、语音转写和 Mira 的每个节拍（带情绪、事件标记），发出节拍时落库。要复盘一场对话看这里就行——`ai_call_log` 是按调用完成顺序写的计费日志，TTS 并发时顺序是乱的，也没有用户说的话。
-
-没当默认的候选模型（gemini-3.x 其他型号、OpenAI TTS、2.5 TTS 等）都留着行，要换把 `is_default` 切过去。单价是写入当时的公开价，以官方为准；`gemini-3.7-flash` 是导入价，2027/1/1 起翻倍，它的音频输入单价没查到，先按文本价填的。Lyria 和 OpenAI TTS 不返回 usage，前者费用记 0，后者按字数和时长估。
+失败处理：模型超时/断线 → 提示 + 重试（已收到的句子播完）；TTS 失败 → 降级浏览器朗读或纯字幕；生图失败 → 失败态 + 重洗；麦克风无权限 → 提示用文字；几乎无声的误触不发送。观测页 `/stats` 看调用、耗时、费用，`/transcripts` 看完整对话记录。
 
 ## 模型与第三方
 
-| 用途 | 默认 | 说明 |
+| 用途 | 模型 | 说明 |
 |---|---|---|
-| 理解 + 回复（含语音转写） | Gemini `gemini-3.7-flash`（思考最小档） | 音频内联跟 prompt 一起发，一次调用完成"听懂 + 回复"。中途为了首句延迟降档用过 `gemini-2.5-flash`（首句 1.5s 左右），但它老是附和复读，偶尔整轮输出不合协议，又切回 3.7（首句 2.3–3.5s）。在 `ai_model` 表随时可换 |
-| TTS | Gemini `gemini-3.8-flash-tts`，音色 `Achernar` | 走 Interactions API 流式输出，语气写在 `speech_metadata.style`（由 emotion 生成），台词逐字作为 transcript，声音标签演成叹气/轻笑/停顿 |
-| TTS（备选） | OpenAI `gpt-4o-mini-tts` | 首包快（约 1.2 秒），但中文语调偏机械；改 `ai_model.is_default` 即可切换 |
-| 生图 | Gemini `gemini-2.5-flash-image`（Nano Banana，约 8s/张） | 4:3 胶片风格；想要画质可以切回 Nano Banana 2 |
-| 角色立绘生成（离线） | OpenAI `gpt-image-2.5-sunburst`，不可用时依次回退 Gemini Nano Banana Pro / Nano Banana 2 | `npm run sprites`，抠绿幕后输出到 `public/sprites` |
-| 配乐生成（离线） | Google `lyria-3.5`（Interactions API） | `npm run bgm`，6 首纯音乐输出到 `public/bgm` |
-| SDK | `@google/genai`；OpenAI 用原生 fetch | |
-| 框架 | Next.js 15 / React 19 / TypeScript / Vitest / better-sqlite3 | 端到端测试用 Python Playwright |
+| 对话（含语音转写） | Gemini `gemini-3.7-flash` | 音频内联一次调用完成"听懂 + 回复"；在 `ai_model` 表可切换 |
+| TTS | Gemini `gemini-3.8-flash-tts` | Interactions API 流式，语气放 `speech_metadata.style`，声音标签演叹气/停顿 |
+| 生图 | Gemini `gemini-2.5-flash-image` | 4:3 胶片风格，约 8s/张 |
+| 立绘 / 配乐（离线） | OpenAI gpt-image / Google Lyria 3.5 | `npm run sprites` / `npm run bgm`，产物已入库 |
+| 框架 | Next.js 15 / React 19 / TypeScript / better-sqlite3 | 单元测试 Vitest，端到端 Python Playwright |
 
-素材来源：
-- 角色立绘（`public/sprites`，33 张）：AI 生成（见上表），原创成年角色，差分经脚本对齐合成。
-- 店长的语音（`public/sfx/closing.wav`）：Gemini TTS（音色 Charon）预生成。
-- 配乐（`public/bgm`，6 首）：Lyria 3.5 生成，含 SynthID 水印。
-- 场景、特效、雨声/雷声/门铃：代码画的、代码合成的（SVG / CSS / Canvas / Web Audio），没有第三方素材。
-- Mock 模式的照片：按题材确定性生成的 SVG。
-- 端到端测试的语音样本（`e2e/fixtures/voice.wav`）：OpenAI TTS 生成。
+素材来源：立绘、配乐、店长语音、测试语音样本均为 AI 生成（上表）；场景、特效、雨声雷声门铃为代码绘制/合成，无第三方素材。模型单价与每次调用记在 SQLite（`/stats` 可见），密钥只放 `.env.local`，不入库。
 
 ## 关键技术选择与取舍
 
-- 用 STT + LLM + TTS 组合，没用端到端实时语音模型。结构化指令、字幕和语音要按句对齐，取消逻辑要完全可控，还得容易 Mock，组合方案这几点都好做；代价是首句延迟高一些（LLM 首行加一句 TTS 首包）。
-- 对话模型来回换过。3.7-flash 起初实测首行 4.5 秒，嫌慢，降到 2.5-flash（关思考，首行 1 秒出头），结果真人试玩发现它接不住对话：附和复读，还会整轮不守协议。又切回 3.7-flash，首行 2.3–3.5 秒，对话质量换这点延迟是值的。文字输入时不让模型输出转写行，能再省一点。
-- TTS 挑的是自然度不是速度。OpenAI `gpt-4o-mini-tts` 首包快，但中文是"能念"不是"会说"，换音色调指令都救不回来。Gemini 3.8 TTS 一开始也没情绪——老接口 `generateContent` 会把语气指令整段念出来，只好光传台词；后来改走 Interactions API，语气放 `speech_metadata.style`、台词当逐字稿，配上声音标签，情绪就对了。代价是首包从 1 秒涨到 3 秒左右（试了 lite 版、去掉 style，都不见好），发音也带一点点湾腔——没用国产 TTS，这是现阶段的妥协。最后是拿同一批台词做 A/B 试听定的。
-- SSE 不是 WebSocket。回合制只要单向流，HTTP 就能上 Serverless，取消就是 fetch abort，简单。
-- 会话状态放客户端，每轮把历史、阶段、场景、剧情状态都发上来。服务端无状态，随时重启，想横向扩就横向扩。
-- 开场预加载。浏览器不让没点击就出声，但下载没人拦：开场卡片显示时就把第一轮的台词、语音、选项拉好缓存，点击直接回放，没拉完就接着进行中的请求播。代价是每次打开页面都有一次开场调用。
-- 立绘走"生成 + 局部差分"而不是 Live2D，72 小时内这是能拿到成品级画面的路。一致性靠"只合成变化区域"解决，口型动作都由配置表驱动（`ACTION_SPRITE`、manifest），算是个动作系统的雏形。
-- 配乐离线生成、音效实时合成。配乐内容固定、质量要求高，生成一次就够了；雨声要跟着天气连续变、雷声门铃要卡事件点，Web Audio 合成不要素材也没延迟。
+- STT + LLM + TTS 组合而非端到端语音模型：指令、字幕、语音要按句对齐，取消要可控，还要能 Mock；代价是首句延迟高一些。
+- 对话模型换过两轮：3.7-flash 嫌慢降到 2.5-flash（首句 1 秒出头），真人试玩发现它只会附和复读，又切回 3.7-flash（首句 2.3–3.5s），质量换延迟值得。
+- TTS 挑自然度不挑速度：OpenAI 首包快但中文机械；Gemini 走 Interactions API 分离语气和台词后情绪自然，代价是首包约 3 秒。同一批台词 A/B 试听定的。
+- SSE 不用 WebSocket：回合制单向流够用，可部署 Serverless，取消就是 fetch abort。
+- 会话状态放客户端，服务端无状态，可水平扩展。
+- 立绘走"生成 + 局部差分"不用 Live2D：72 小时内能拿到成品级画面，口型动作由配置表驱动。
 
 ## 已知问题
 
-- 对话质量和模型档位直接相关。现在用的是 flash 级小模型（图快图便宜），接话偶尔还是平；换 pro 级或更新的旗舰模型，接话、节奏和往事展开的层次都会更好，协议也守得更稳。`ai_model` 表里切一下 `is_default` 就能换。
-- TTS 没用国产模型，Gemini 的中文发音带一点点湾腔。换 MiniMax / 豆包这类国产 TTS 就没这个问题，接口已经留好（见「如果再开发两周」第 1 条）。
-- 语音首包 5–7 秒（LLM 首行 2.3–3.5 秒 + Gemini TTS 首包约 3 秒 + 传输）。语音输入从松手到开口还要再多两秒上传和转写。这是为 TTS 音质和对话质量付的延迟；切 OpenAI TTS 能压到 2–2.5 秒。开场因为预加载不受影响。
-- 动作立绘没有口型差分，做动作的那 2.2 秒里说话嘴不动（已经把动作停留时间缩短了，不那么明显）。
-- 剧情时机靠模型判断、时间表兜底。模型没跟上的时候，事件是服务端补的固定台词，偶尔会紧跟在她刚问完用户问题的后面，有点突兀；补句的文案每局是一样的。重复检测只认整句，换个说法的车轱辘话拦不住。
-- 回复选项是模型生成的，偶尔跟上一句衔接生硬，或者跟之前问过的重了。
-- 观测面板在手机上几乎占满屏，会挡住输入框和照片卡。调试模式才有，先不管了。
-- 配乐 6 首共 17MB 左右（192kbps mp3），首次切歌要下载。真要上线得转低码率或者流式加载。
-- `ScriptProcessorNode` 已经标记废弃了，但它兼容性最好（iOS Safari 也行），后面再换 AudioWorklet。
-- iOS 上 `speechSynthesis` 的降级音色看系统心情。
-- SQLite 文件没法上 Serverless（实例间不共享也不持久）。线上要换 Turso/libSQL 或 Postgres，好在 `db.ts` 是唯一接入点。
-
-## 测试
-
-- 单元测试（`npm test`，69 个）：回合状态机的打断/失效响应/超时/断线与开场预加载（`turnController.test.ts`），模型 Master 与计费（`aiRegistry.test.ts`），节拍校验、声音标签、回复选项、结巴限制（`protocol.test.ts`），信任值、事件前置条件与演出、事件与台词一致、结局判定与两轮收尾、每轮推进限制、时间表保底（`storyState.test.ts`），多轮上下文映射与提示词（`story.test.ts`），对话记录（`transcript.test.ts`）。
-- 端到端测试（`e2e/`，Python Playwright，先 `pip install playwright && playwright install chromium`）：
-  - `python3 e2e/mock_e2e.py http://localhost:3000`：Mock 模式 32 项检查，不用密钥——移动端布局、状态切换、选项显示与点击、情绪/动作数量、生图状态、麦克风与空格打断、快速连发、只点"推动剧情"选项走完全剧情到结局卡、四种故障注入、桌面端、JS 报错。
-  - `python3 e2e/real_e2e.py http://localhost:3000`：要密钥。拿 `e2e/fixtures/voice.wav` 当虚拟麦克风，验证真实语音识别、TTS 播放中打断、真实生图、观测页。
-  - 截图在 `e2e/shots/`（git 忽略）。
+- 对话质量和模型档位直接相关，现在是 flash 级小模型，换 pro 级效果会更好（`ai_model` 表切 `is_default` 即可）。
+- TTS 没用国产模型，中文发音带一点点湾腔；换 MiniMax / 豆包即可解决，接口已留好。
+- 语音首包 5–7 秒（LLM 首行 + Gemini TTS 首包），切 OpenAI TTS 可到 2–2.5 秒；开场有预加载不受影响。
+- 动作立绘没有口型差分，做动作那两秒嘴不动；服务端补的保底台词偶尔略显突兀，文案每局相同。
+- SQLite 不适合 Serverless 部署，线上要换 Turso/Postgres（`db.ts` 是唯一接入点）。
 
 ## 投入时间
 
@@ -232,9 +107,9 @@ state = listening
 
 ## 如果再开发两周
 
-1. 延迟：接入中文原生、首包几百毫秒级的流式 TTS（MiniMax / 豆包这类；`ttsStream` 和 `ai_model` 已经支持按 provider 切，emotion 可以直接映射到它们的情绪参数）。用户松手后先播一段预录的"嗯……"或点头把等待遮过去。目标首包 1.5 秒以内。
-2. 实时语音：VAD 自动检测开口，区分"嗯/对"这种附和跟真打断（短时长 + 低能量 + 关键词），做了回声消除就能去掉按住说话。
-3. 角色表演：动作立绘也配嘴型差分；动作优先级队列和过渡帧；或者干脆迁 Live2D/Rive，口型按音素驱动。
-4. 剧情：事件时机、结局条件抽成配置；多收集几局的数据，校准信任值和节奏。
-5. 生成媒体：用角色参考图生成带 Mira 本人的剧情插画、保持外观一致；结局节点生成 5 秒短视频，生成期间现有动画顶上。
-6. 工程：会话事件录制回放（排查问题和做 Demo 都用得上）、端到端测试进 CI、观测数据上报。
+1. 延迟：接入首包几百毫秒的国产流式 TTS（provider 接口已留），松手后先播预录反应遮住等待，目标首包 1.5 秒内。
+2. 实时语音：VAD 自动检测开口、区分附和与打断，做回声消除后去掉按住说话。
+3. 角色表演：动作立绘补口型差分、动作过渡帧，或迁移 Live2D/Rive 按音素驱动口型。
+4. 剧情：事件时机和结局条件抽成配置，按多局数据校准节奏。
+5. 生成媒体：按角色参考图生成带 Mira 的剧情插画，结局节点生成短视频。
+6. 工程：会话录制回放、端到端测试进 CI、观测上报。
