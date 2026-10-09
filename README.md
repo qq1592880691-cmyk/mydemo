@@ -193,7 +193,7 @@ state = listening
 | 理解 + 回复（含语音转写） | Gemini `gemini-2.5-flash`（关闭思考） | 音频以内联方式与 prompt 一起发送，一次调用完成"听懂 + 回复"；可在 `ai_model` 表切换 |
 | TTS | Gemini `gemini-3.8-flash-tts`，音色 `Achernar` | 走 Interactions API 流式输出：语气写在 `speech_metadata.style`（由 emotion 生成），台词逐字作为 transcript，内联声音标签演成叹气/轻笑/停顿 |
 | TTS（备选） | OpenAI `gpt-4o-mini-tts` | 首包更快（约 1.2 秒），但中文语调明显偏机械；改 `ai_model.is_default` 即可切换 |
-| 生图 | Gemini `gemini-3.1-flash-image-preview`（Nano Banana 2） | 4:3 胶片风格 |
+| 生图 | Gemini `gemini-2.5-flash-image`（Nano Banana，速度优先，实测约 8s/张） | 4:3 胶片风格；画质优先可在 `ai_model` 表切回 Nano Banana 2 |
 | 角色立绘生成（离线） | OpenAI `gpt-image-2.5-sunburst`，不可用时依次回退 Gemini Nano Banana Pro / Nano Banana 2 | `npm run sprites`，抠绿幕后输出到 `public/sprites` |
 | 配乐生成（离线） | Google `lyria-3.5`（Interactions API） | `npm run bgm`，6 首纯音乐输出到 `public/bgm` |
 | SDK | `@google/genai`；OpenAI 用原生 fetch | |
